@@ -18,6 +18,7 @@ import {
   type OcrWord as PageWord,
   EMPTY_BUSINESS_PROFILE,
 } from "./types";
+import { computeFileHash } from "./file-hash-gate";
 import { detectPrepaid, moneyToNumber, dueDateFromPaymentTerms, parseDateParts } from "./zones";
 import { labelsFor, detectDocumentLocale, type DocumentLocale } from "./labels";
 import { ibanChecksumValid } from "./iban";
@@ -50,18 +51,15 @@ export type ExtractedFields = {
   vatNumber?: string | undefined;
   businessRegistrationNumber?: string | undefined;
   lineItems: LineItem[];
-  confidence: Partial<Record<ExtractedField, number>>;
+  provenance: Partial<Record<ExtractedField, Provenance>>;
   fieldSources: Partial<Record<ExtractedField, number>>;
-  baseConfidence: number;
   prepaid?: boolean;
   prepaidPhrase?: string;
 };
 
-export type PageRead = { pageNumber: number; text: string; confidence: number; words?: OcrWord[] };
+export type PageRead = { pageNumber: number; text: string; words?: OcrWord[] };
 export type ProcessingSkeleton = ReturnType<typeof buildProcessingSkeleton>;
-import { preprocess } from "./preprocess";
-import { layoutRecognize, type LayoutOcrResult } from "./layout-ocr";
-import { runZoneCheck } from "./zone-check";
+
 import { applyCrossCheck, compareExtractions, disagreements } from "./cross-check";
 import { specToZone, parseLineItemRows } from "./mapping";
 import { embedVendorText, extractVendorBlock, fingerprintOf } from "./fingerprint";
@@ -96,14 +94,21 @@ export function normalize(text, type) {
   }
   return trimmed;
 }
-/** A page with at least this much embedded text skips the slower render + OCR path. */
+/** A page with at least this much embedded text skips the slower render path. */
 const TEXT_LAYER_MIN_CHARS = 120;
-/** Render scale for OCR fallback (2 ≈ 144 dpi, a good speed/accuracy trade-off). */
+/** Render scale for page images fed to the VLM (2 ≈ 144 dpi). */
 const RENDER_SCALE = 2;
-/** Embedded PDF text is exact, but layout reconstruction is not — stay below 1. */
-const TEXT_LAYER_CONFIDENCE = 0.98;
-/**
- * Only matches figures that look like currency. Dutch/European forms come
+/** Highest provenance tier — embedded PDF text layer is the source of truth. */
+const PROV_TEXT_LAYER: Provenance = "exact";
+/** VLMs read what they see; mild skew/noise is handled by the model, not preprocessing. */
+const PROV_VLM: Provenance = "read";
+/** Regex/heuristic reads over already-extracted text. */
+const PROV_OCR: Provenance = "read";
+/** Computed from other fields (derived due date, etc.). */
+const PROV_DERIVED: Provenance = "derived";
+/** Human-entered or confirmed at prompt time. */
+const PROV_MANUAL: Provenance = "manual";
+/** Only matches figures that look like currency. Dutch/European forms come
  * first so "1.234,56" is read as 1234.56 and not as US "1.23": alternation
  * is ordered, and the Dutch comma-decimal carries a lookahead so US
  * "14,200.00" is not clipped to "14,20".
@@ -952,43 +957,9 @@ export function findDateIn(text, labels, locale: DocumentLocale = "NL") {
       };
   }
 }
-/** Only filters lines that are *purely* metadata — not lines that merely
- * contain a metadata keyword alongside a company name. */
 /** Fields that, when all present, indicate the heuristic path has enough
  * evidence to skip the slow VLM call entirely. */
 const CRITICAL_HEURISTIC_FIELDS = ["vendor", "invoiceNumber", "issueDate", "total"];
-/** Vendor heuristic result cache — keyed by lowercased vendor name.
- * When a heuristic extraction succeeds for a vendor, future invoices from
- * the same vendor can skip the VLM entirely even if the heuristic only
- * partially matched on the new invoice (the vendor name alone is enough
- * to predict a successful heuristic path).
- * TTL: 10 minutes, LRU cap: 200 entries. */
-const VENDOR_HEURISTIC_CACHE = new Map();
-const VENDOR_CACHE_TTL = 6e5;
-const VENDOR_CACHE_MAX = 200;
-export function cacheVendorHeuristic(vendorName, fields) {
-  if (!vendorName) return;
-  const key = vendorName.toLowerCase();
-  if (VENDOR_HEURISTIC_CACHE.size >= VENDOR_CACHE_MAX) {
-    const oldest = VENDOR_HEURISTIC_CACHE.keys().next().value;
-    if (oldest !== undefined) VENDOR_HEURISTIC_CACHE.delete(oldest);
-  }
-  VENDOR_HEURISTIC_CACHE.set(key, {
-    ts: Date.now(),
-    fields,
-  });
-}
-export function lookupVendorHeuristic(vendorName) {
-  if (!vendorName) return undefined;
-  const key = vendorName.toLowerCase();
-  const entry = VENDOR_HEURISTIC_CACHE.get(key);
-  if (!entry) return undefined;
-  if (Date.now() - entry.ts > VENDOR_CACHE_TTL) {
-    VENDOR_HEURISTIC_CACHE.delete(key);
-    return;
-  }
-  return entry.fields;
-}
 const NOISE_RE =
   /^(?:factuur|offerte|pakbon|kvk|btw[-\s]?(?:nr|nummer)|iban|bic|betaling|overschrijving|\bbank\b|rekening|invoice|bill\s*to|receipt|statement|tax\s*id|@|www\.|http)/i;
 const BTW_ID_RE = /^btw\s+[A-Z]{2}\d/i;
@@ -1196,12 +1167,21 @@ export function locate(pages, find) {
 /** Renders a PDF page to a PNG blob (shared by vision-model input and OCR fallback). */
 async function renderPageToPngBlob(page, scale = RENDER_SCALE) {
   const viewport = page.getViewport({ scale });
+  // Defensive cap: hostile PDFs can declare absurd page sizes. A 30 000 pt page
+  // at 1:1 is ~900 megapixels and will OOM the tab. We scale down instead.
+  const MAX_PX = 2000;
+  const fscale = Math.min(
+    scale,
+    MAX_PX / viewport.width,
+    MAX_PX / viewport.height,
+  );
+  const capped = page.getViewport({ scale: fscale });
   const canvas = document.createElement("canvas");
-  canvas.width = Math.ceil(viewport.width);
-  canvas.height = Math.ceil(viewport.height);
+  canvas.width = Math.ceil(capped.width);
+  canvas.height = Math.ceil(capped.height);
   await page.render({
     canvas,
-    viewport,
+    viewport: capped,
   }).promise;
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/png"));
   canvas.width = canvas.height = 0;
@@ -1258,13 +1238,6 @@ export function extractFieldsFromPages(
   const fieldLabels = (field: ExtractedField, fallback: string[]) => [
     ...new Set([...labelsFor(field, locale), ...fallback]),
   ];
-  const pageConfidence = new Map(pages.map((page) => [page.pageNumber, page.confidence]));
-  const totalChars = pages.reduce((sum, page) => sum + page.text.trim().length, 0);
-  const baseConfidence =
-    pages.length === 0
-      ? 0.55
-      : pages.reduce((s, p) => s + p.confidence * Math.max(p.text.trim().length, 1), 0) /
-        Math.max(totalChars, pages.length);
   const vendorHit = locate(pageTexts, (t) => guessVendorIn(t, businessProfile));
   const currency = pages.map((p) => inferCurrency(p.text)).find(Boolean);
   const numberHit = locate(pageTexts, findInvoiceNumberIn);
@@ -1400,10 +1373,6 @@ export function extractFieldsFromPages(
   const lineItems = pages
     .flatMap((p) => guessLineItemsIn(p.text, p.pageNumber))
     .slice(0, multiPage ? 20 : 8);
-  const confidenceFor = (hit, quality) => {
-    if (!hit) return cappedMissingConfidence(baseConfidence);
-    return cappedConfidence((pageConfidence.get(hit.page) ?? baseConfidence) * quality, 0.99);
-  };
   const fieldSources = {};
   if (vendorFinal) fieldSources.vendor = vendorFinal.page;
   if (numberHit) fieldSources.invoiceNumber = numberHit.page;
@@ -1417,6 +1386,17 @@ export function extractFieldsFromPages(
   if (ibanHit) fieldSources.iban = ibanHit.page;
   if (vatHit) fieldSources.vatNumber = vatHit.page;
   if (businessRegHit) fieldSources.businessRegistrationNumber = businessRegHit.page;
+
+  // Provenance for regex/heuristic reads: "read" (seen by a reader, not exact text layer).
+  const provenance: Record<string, Provenance> = {};
+  for (const f of Object.keys(fieldSources)) {
+    provenance[f] = PROV_OCR;
+  }
+  // Derived due date from payment terms → "derived".
+  if (dueFinal && dueFinal.labelled === false && !dueHit) {
+    provenance.dueDate = PROV_DERIVED;
+  }
+
   return {
     vendor: vendorFinal?.value ?? vendorNameFromFile(fileName),
     currency,
@@ -1432,22 +1412,8 @@ export function extractFieldsFromPages(
     vatNumber: vatHit?.value,
     businessRegistrationNumber: businessRegHit?.value,
     lineItems,
-    confidence: {
-      vendor: confidenceFor(vendorFinal, 0.97),
-      invoiceNumber: confidenceFor(numberHit, numberHit?.labelled === false ? 0.85 : 1),
-      issueDate: confidenceFor(issueHit, 0.97),
-      dueDate: confidenceFor(dueFinal, dueFinal?.labelled === false ? 0.8 : 0.95),
-      subtotal: confidenceFor(subtotalHit, 0.98),
-      tax: confidenceFor(taxHit, 0.95),
-      total: confidenceFor(totalHit, 0.98),
-      address: confidenceFor(addressHit, addressHit?.labelled === false ? 0.8 : 0.96),
-      vendorEmail: confidenceFor(emailHit, emailHit?.labelled === false ? 0.82 : 0.96),
-      iban: confidenceFor(ibanHit, ibanHit?.labelled === false ? 0.9 : 0.99),
-      vatNumber: confidenceFor(vatHit, vatHit?.labelled === false ? 0.9 : 0.99),
-      businessRegistrationNumber: confidenceFor(businessRegHit, 0.99),
-    },
+    provenance,
     fieldSources,
-    baseConfidence,
     ...(() => {
       const prepaid = detectPrepaid(pages.map((p) => p.text).join("\n"));
       return { prepaid: prepaid.prepaid, prepaidPhrase: prepaid.phrase };
@@ -1483,147 +1449,180 @@ export function toPageText(page) {
     ...(page.words ? { words: page.words } : {}),
   };
 }
-export function cappedMissingConfidence(confidence, maximum = 0.5) {
-  return cappedConfidence(confidence * 0.55, maximum);
+/** Given a provenance tag, return the numeric score used only for the approval gate. */
+export function provenanceScore(p: Provenance): number {
+  switch (p) {
+    case "exact": return 0.98;
+    case "read": return 0.92;
+    case "derived": return 0.55;
+    case "manual": return 1.0;
+  }
 }
-export function cappedConfidence(confidence, maximum = 1) {
-  return Number(Math.min(maximum, Math.max(0, confidence)).toFixed(2));
-}
-export function vendorNameFromFile(fileName) {
-  return fileName.replace(/\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ");
+
+/** Returns the higher-ranked provenance (used as merge tiebreaker). */
+export function higherProvenance(a: Provenance, b: Provenance): Provenance {
+  return PROVENANCE_RANK[a] >= PROVENANCE_RANK[b] ? a : b;
 }
 /**
- * Confidence floor — when ALL fields from a template pass clear this, we ship
- * the result without falling back to the VLM. The rework doc uses 0.9; we
- * soften to 0.78 to keep the template path useful on slightly noisy scans.
+ * Provenance enum — replaces the old confidence arithmetic (0.98 / 0.92×quality /
+ * 0.55 floors / 0.65 factor). Each extracted field carries a provenance tag that
+ * maps to a UI color; a numeric score is kept only where the approval gate needs
+ * a threshold (e.g. auto-approve when all fields are exact+read with no mismatches).
  */
-const TEMPLATE_CONFIDENCE_FLOOR = 0.78;
+export type Provenance =
+  | "exact"    // UBL / embedded PDF text layer — the source of truth
+  | "read"     // template zone match or VLM read — seen by a reader
+  | "derived"  // computed from other fields (e.g. due date from payment terms)
+  | "manual";  // human-entered or confirmed at prompt time
+
+/** Map provenance to a UI color token. */
+export const PROVENANCE_COLOR: Record<Provenance, string> = {
+  exact:   "text-green-600 bg-green-50 border-green-200",
+  read:    "text-blue-600 bg-blue-50 border-blue-200",
+  derived: "text-muted-foreground bg-muted border-border",
+  manual:  "text-amber-600 bg-amber-50 border-amber-200",
+};
+
 /**
- * Loads + preprocesses the file into per-page payloads. Each payload carries
- * the OCR text, a per-word bounding-box array, and the rendered page image.
+ * Fixed merge priority. When two readers disagree on a field, reconciliation
+ * picks the value consistent with subtotal + tax / line sums. The priority
+ * exists only to decide which reader's value to try first.
+ *
+ *   UBL / text-layer regex  >  template zone  >  VLM  >  derived
  */
-async function loadPages(file, onProgress) {
-  const isImage = file.type.startsWith("image/");
-  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-  if (isImage) {
-    onProgress?.({
-      stage: "preprocessing",
-      progress: 0.08,
-    });
-    const clean = await preprocess(file);
-    onProgress?.({
-      stage: "layout OCR",
-      progress: 0.18,
-    });
-    const ocr = await layoutRecognize(clean, (m) =>
-      onProgress?.({
-        stage: `scanning · ${m.stage}`,
-        progress: 0.18 + m.progress * 0.55,
-      }),
-    );
-    return {
-      pages: [
-        {
-          pageNumber: 1,
-          text: ocr.text,
-          confidence: ocr.confidence,
-          method: ocr.text.trim() ? "ocr" : "none",
-          image: file,
-          words: ocr.words,
-        },
-      ],
-      totalPages: 1,
-      truncated: false,
-    };
-  }
-  if (!isPdf)
-    return {
-      pages: [],
-      totalPages: 0,
-      truncated: false,
-    };
-  const pdfjs = await pdfLib();
-  const data = await file.arrayBuffer();
-  const loadingTask = pdfjs.getDocument({ data });
-  const pdf = await loadingTask.promise;
-  const totalPages = pdf.numPages;
-  const count = Math.min(totalPages, 20);
-  const pages = [];
-  const processPage = async (n) => {
-    const base = 0.05 + (0.7 * (n - 1)) / count;
-    onProgress?.({
-      stage: `preprocessing page ${n}`,
-      progress: base,
-      page: n,
-      totalPages,
-    });
-    const page = await pdf.getPage(n);
-    try {
-      const layered = await extractTextLayer(page);
-      let image;
-      let words = [];
-      let text = layered;
-      let confidence = layered.trim() ? TEXT_LAYER_CONFIDENCE : 0.4;
-      let method = layered.trim().length >= TEXT_LAYER_MIN_CHARS ? "text-layer" : "none";
-      if (method === "text-layer") words = await textLayerWordsFromPage(page);
-      else {
-        onProgress?.({
-          stage: `scanning page ${n}`,
-          progress: base + 0.5 / count,
-          page: n,
-          totalPages,
-        });
-        image = await renderPageToPngBlob(page);
-        if (image) {
-          const ocr = await layoutRecognize(await preprocess(image), (m) =>
-            onProgress?.({
-              stage: `scanning page ${n} · ${m.stage}`,
-              progress: base + 0.05 + (m.progress * 0.6) / count,
-              page: n,
-              totalPages,
-            }),
-          );
-          const useLayer =
-            ocr.text.trim().length < layered.trim().length && layered.trim().length > 0;
-          text = useLayer ? layered : ocr.text;
-          confidence = text.trim() ? (useLayer ? 0.6 : ocr.confidence) : 0.4;
-          method = text.trim() ? "ocr" : "none";
-          words = useLayer ? words : ocr.words;
-        }
-      }
-      return {
-        pageNumber: n,
-        text,
-        confidence,
-        method,
-        image: image ?? undefined,
-        words,
-        sourceFile: file,
-      };
-    } finally {
-      page.cleanup();
-    }
-  };
-  try {
-    const concurrency = count > 1 ? 2 : 1;
-    for (let start = 1; start <= count; start += concurrency) {
-      const batch = await Promise.all(
-        Array.from({ length: Math.min(concurrency, count - start + 1) }, (_, offset) =>
-          processPage(start + offset),
-        ),
-      );
-      pages.push(...batch);
-    }
-    pages.sort((a, b) => a.pageNumber - b.pageNumber);
-  } finally {
-    await loadingTask.destroy();
-  }
-  return {
-    pages,
-    totalPages,
-    truncated: totalPages > count,
-  };
-}
+const PROVENANCE_RANK: Record<Provenance, number> = {
+  exact:   4,
+  read:    3,
+  derived: 1,
+  manual:  2,
+};
+
+/** Threshold for auto-approve: every field is exact or read, nothing derived/manual. */
+const AUTO_APPROVE_PROVENANCE = new Set(["exact", "read"]);
+/**
+ /** Loads the file into per-page payloads. Each payload carries
+  * the extracted text, word boxes (from the text layer where available),
+  * and a rendered page image for the VLM path.
+  *
+  * Scanned images (photo/PDF-that-is-actually-an-image) skip Tesseract entirely:
+  * they are rendered to PNG and fed straight to the vision model. Gemma handles
+  * mild skew and noise natively — preprocessing was only there to help Tesseract,
+  * and we already pay the model load on this path.
+  */
+ async function loadPages(file, onProgress) {
+   const isImage = file.type.startsWith("image/");
+   const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+   if (isImage) {
+     onProgress?.({
+       stage: "rendering page",
+       progress: 0.08,
+     });
+     // Images can't use pdfjs — render directly from the blob.
+     const bitmap = await createImageBitmap(file).catch(() => null);
+     if (!bitmap) {
+       return {
+         pages: [],
+         totalPages: 0,
+         truncated: false,
+       };
+     }
+     const canvas = document.createElement("canvas");
+     canvas.width = Math.ceil(bitmap.width * RENDER_SCALE);
+     canvas.height = Math.ceil(bitmap.height * RENDER_SCALE);
+     const ctx = canvas.getContext("2d");
+     if (ctx) {
+       ctx.imageSmoothingEnabled = true;
+       ctx.imageSmoothingQuality = "high";
+       ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+     }
+     bitmap.close();
+     const pngBlob = await new Promise<Blob | null>((resolve) =>
+       canvas.toBlob(resolve, "image/png"),
+     );
+     canvas.width = canvas.height = 0;
+     return {
+       pages: [
+         {
+           pageNumber: 1,
+           text: "",
+           method: "none",
+           image: pngBlob ?? file,
+           words: [],
+           sourceFile: file,
+         },
+       ],
+       totalPages: 1,
+       truncated: false,
+     };
+   }
+   if (!isPdf)
+     return {
+       pages: [],
+       totalPages: 0,
+       truncated: false,
+     };
+   const pdfjs = await pdfLib();
+   const data = await file.arrayBuffer();
+   const loadingTask = pdfjs.getDocument({ data, disableXfa: true });
+   const pdf = await loadingTask.promise;
+   const totalPages = pdf.numPages;
+   const count = Math.min(totalPages, MAX_PDF_PAGES);
+   const pages = [];
+   const processPage = async (n) => {
+     const base = 0.05 + (0.7 * (n - 1)) / count;
+     onProgress?.({
+       stage: `reading page ${n}`,
+       progress: base,
+       page: n,
+       totalPages,
+     });
+     const page = await pdf.getPage(n);
+     try {
+       const layered = await extractTextLayer(page);
+       let image;
+       let words = [];
+       let text = layered;
+       let method = layered.trim().length >= TEXT_LAYER_MIN_CHARS ? "text-layer" : "none";
+       if (method === "text-layer") {
+         words = await textLayerWordsFromPage(page);
+       } else {
+         // No embedded text or too little — render for the VLM.
+         onProgress?.({
+           stage: `rendering page ${n}`,
+           progress: base + 0.5 / count,
+           page: n,
+           totalPages,
+         });
+         image = await renderPageToPngBlob(page, RENDER_SCALE);
+       }
+       return {
+         pageNumber: n,
+         text,
+         method,
+         image: image ?? undefined,
+         words,
+         sourceFile: file,
+       };
+     } finally {
+       page.cleanup();
+     }
+   };
+   try {
+     // Sequential page processing — the VLM path is the bottleneck, not page I/O.
+     // Concurrency-2 only helps Tesseract, which we no longer run.
+     for (let n = 1; n <= count; n++) {
+       pages.push(await processPage(n));
+     }
+     pages.sort((a, b) => a.pageNumber - b.pageNumber);
+   } finally {
+     await loadingTask.destroy();
+   }
+   return {
+     pages,
+     totalPages,
+     truncated: totalPages > count,
+   };
+ }
 /** Projects the PDF text layer's real transforms into normalized word boxes. */
 async function textLayerWordsFromPage(page) {
   const content = await page.getTextContent();
@@ -1655,9 +1654,8 @@ async function textLayerWordsFromPage(page) {
 }
 /**
  * Tries the cached template path. Returns undefined when no template matched
- * or nothing read strongly — caller falls through to VLM. When some fields
- * read below the floor, a partial result comes back so the caller can flag
- * drift on the invoice instead of paying for a full re-read.
+ * or nothing read — caller falls through to VLM. Every field the template
+ * produces gets provenance "read" (template zone match).
  */
 async function tryTemplatePath(pages, templates) {
   if (!templates || Object.keys(templates).length === 0) return undefined;
@@ -1672,7 +1670,7 @@ async function tryTemplatePath(pages, templates) {
   });
   if (!tpl) return undefined;
   const fields = {};
-  const confidence = {};
+  const provenance = {};
   const fieldSources = {};
   for (const page of pages)
     for (const field of Object.keys(tpl.fields)) {
@@ -1681,29 +1679,16 @@ async function tryTemplatePath(pages, templates) {
       const hit = applyTemplateField(page.words, spec, field);
       if (hit === undefined) continue;
       fields[field] = hit.value;
-      confidence[field] = hit.confidence;
+      provenance[field] = PROV_VLM;
       fieldSources[field] = page.pageNumber;
     }
-  if (Object.keys(confidence).length === 0) return undefined;
-  const tplFields = Object.keys(tpl.fields);
-  const strong = tplFields.filter((field) => (confidence[field] ?? 0) >= TEMPLATE_CONFIDENCE_FLOOR);
-  if (strong.length === 0) return undefined;
-  if (strong.length < tplFields.length) {
-    for (const field of tplFields)
-      if ((confidence[field] ?? 0) < TEMPLATE_CONFIDENCE_FLOOR) {
-        delete fields[field];
-        delete confidence[field];
-        delete fieldSources[field];
-      }
-  }
-  const passAll = strong.length === tplFields.length;
+  if (Object.keys(fields).length === 0) return undefined;
   return {
     fields,
-    confidence,
+    provenance,
     fieldSources,
     fingerprint: tpl.vendor_fingerprint,
     templateKey: tpl.vendor_key,
-    ...(passAll ? {} : { partial: true }),
   };
 }
 /**
@@ -1722,20 +1707,20 @@ export function detectDrift(tpl, fields) {
  */
 export function applyDriftReads(args) {
   const fields = { ...args.fields };
-  const confidence = { ...args.confidence };
+  const provenance = { ...args.provenance };
   const fieldSources = { ...args.fieldSources };
   const recoveredBy = {};
   for (const field of args.missing) {
     const read = args.reads[field];
     if (!read) continue;
     fields[field] = read.value;
-    confidence[field] = read.confidence;
+    provenance[field] = PROV_VLM;
     fieldSources[field] = read.page;
     recoveredBy[field] = args.source;
   }
   return {
     fields,
-    confidence,
+    provenance,
     fieldSources,
     recoveredBy,
     stillMissing: args.missing.filter((field) => recoveredBy[field] === undefined),
@@ -1757,7 +1742,7 @@ export function recoverFieldsFromText(pages, fileName, missing, businessProfile)
     if (value === undefined || value === "") continue;
     out[field] = {
       value,
-      confidence: reads.confidence[field],
+      provenance: reads.provenance[field] ?? PROV_OCR,
       page,
     };
   }
@@ -1795,7 +1780,7 @@ async function ensureVisionImages(pages) {
   if (missing.length === 0) return;
   const source = missing[0].sourceFile;
   if (!/\.pdf$/i.test(source.name) && source.type !== "application/pdf") return;
-  const loadingTask = (await pdfLib()).getDocument({ data: await source.arrayBuffer() });
+  const loadingTask = (await pdfLib()).getDocument({ data: await source.arrayBuffer(), disableXfa: true });
   const pdf = await loadingTask.promise;
   try {
     await Promise.all(
@@ -1887,14 +1872,14 @@ async function tryVlmPath(pages, onProgress, onToken) {
     prepaidPhrase: prepaid.phrase,
   };
 }
-/** Last-resort path: pure regex/heuristic over OCR text. Used when both the
- * template store is empty AND no VLM is available. */
+/** Last-resort path: pure regex/heuristic over text. Used when both the
+ * template store is empty AND no VLM is available. Every field gets
+ * provenance "read" — seen by a reader, not exact text layer. */
 async function tryHeuristicPath(pages, fileName, businessProfile) {
   const fields = extractFieldsFromPages(
     pages.map((p) => ({
       pageNumber: p.pageNumber,
       text: p.text,
-      confidence: p.confidence,
       words: p.words,
     })),
     fileName,
@@ -1916,7 +1901,7 @@ async function tryHeuristicPath(pages, fileName, businessProfile) {
   const prepaid = detectPrepaid(pages.map((p) => p.text).join("\n"));
   return {
     fields: out,
-    confidence: fields.confidence,
+    provenance: fields.provenance,
     fieldSources: fields.fieldSources,
     lineItems: fields.lineItems,
     currency: fields.currency,
@@ -1929,6 +1914,8 @@ async function tryHeuristicPath(pages, fileName, businessProfile) {
  *  (novel vendor). The caller decides whether to await the VLM/heuristic
  *  fallback here or hand off to a background job. */
 export async function extractQuickPhase(file, onProgress, templates) {
+  // Hash the original bytes uniformly at the top, before any type branching.
+  const fileHash = await computeFileHash(file);
   const isImage = file.type.startsWith("image/");
   const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
   if (!isImage && !isPdf) {
@@ -1960,7 +1947,7 @@ export async function extractQuickPhase(file, onProgress, templates) {
           {
             id: uid(),
             at: now,
-            actor: "OCR engine",
+            actor: "text layer",
             action: "Document uploaded (preview only)",
             note: file.name,
           },
@@ -1970,6 +1957,7 @@ export async function extractQuickPhase(file, onProgress, templates) {
         fileName: file.name,
         fileType: file.type,
         fileUrl: URL.createObjectURL(file),
+        fileHash,
         createdAt: now,
       },
     };
@@ -2006,12 +1994,13 @@ export async function extractQuickPhase(file, onProgress, templates) {
       if (merged.stillMissing.length > 0)
         return {
           kind: "processing",
-          invoice: buildProcessingSkeleton(file, loaded, {
+          invoice: await buildProcessingSkeleton(file, loaded, {
             fields: merged.fields,
             confidence: merged.confidence,
             fieldSources: merged.fieldSources,
             currency,
             action: "Template matched — recovering missing fields",
+            fileHash: partial?.fileHash,
           }),
           loadedPages: loaded.pages,
           firstSlow: false,
@@ -2054,33 +2043,40 @@ export async function extractQuickPhase(file, onProgress, templates) {
             templateVersion: tpl?.version,
             detectedAt: new Date().toISOString(),
           },
+          fileHash,
         },
       };
     }
     return {
       kind: "invoice",
-      invoice: await finalizeInvoice({
-        file,
-        loaded,
-        chosen: {
-          path: "template",
-          fields: templateHit.fields,
-          confidence: templateHit.confidence,
-          fieldSources: templateHit.fieldSources,
-          lineItems,
-          currency,
-          templateFingerprint: templateHit.fingerprint,
-          model: undefined,
-          ...(hold ? { templateHold: true } : {}),
-        },
-        templates,
-      }),
+      invoice: {
+        ...(await finalizeInvoice({
+          file,
+          loaded,
+          chosen: {
+            path: "template",
+            fields: templateHit.fields,
+            confidence: templateHit.confidence,
+            fieldSources: templateHit.fieldSources,
+            lineItems,
+            currency,
+            templateFingerprint: templateHit.fingerprint,
+            model: undefined,
+            ...(hold ? { templateHold: true } : {}),
+          },
+          templates,
+        })),
+        fileHash,
+      },
     };
   }
   const firstSlow = !templates || Object.keys(templates).length === 0;
   return {
     kind: "processing",
-    invoice: buildProcessingSkeleton(file, loaded, { action: "Queued for AI extraction" }),
+    invoice: await buildProcessingSkeleton(file, loaded, {
+      action: "Queued for AI extraction",
+      fileHash: partial?.fileHash,
+    }),
     loadedPages: loaded.pages,
     firstSlow,
   };
@@ -2090,7 +2086,7 @@ export async function extractQuickPhase(file, onProgress, templates) {
  * drift recovery job surface the fields a template already read while it waits
  * on the model.
  */
-export function buildProcessingSkeleton(file, loaded, partial) {
+export async function buildProcessingSkeleton(file, loaded, partial) {
   const now = new Date().toISOString();
   const method = overallMethod(loaded.pages);
   const pageCount = loaded.totalPages;
@@ -2129,7 +2125,7 @@ export function buildProcessingSkeleton(file, loaded, partial) {
       {
         id: uid(),
         at: now,
-        actor: "OCR engine",
+        actor: "text layer",
         action: partial?.action ?? "Queued for extraction",
         note: file.name,
       },
@@ -2156,6 +2152,7 @@ export function buildProcessingSkeleton(file, loaded, partial) {
       method: p.method,
     })),
     fieldSources: partial?.fieldSources ?? {},
+    fileHash: partial?.fileHash ?? "",
     createdAt: now,
   };
 }
@@ -2175,8 +2172,6 @@ export async function runBackgroundJob(skeleton, onProgress, onToken, templates,
   Math.round(
     (typeof performance_default !== "undefined" ? performance_default.now() : Date.now()) - t0,
   );
-  if (heur.fields.vendor && heur.fields.invoiceNumber)
-    cacheVendorHeuristic(String(heur.fields.vendor), heur.fields);
   if (
     CRITICAL_HEURISTIC_FIELDS.every(
       (f) => heur.fields[f] !== undefined && heur.fields[f] !== "" && heur.fields[f] !== 0,
@@ -2185,45 +2180,14 @@ export async function runBackgroundJob(skeleton, onProgress, onToken, templates,
     chosen = {
       path: "ocr",
       fields: heur.fields,
-      confidence: heur.confidence,
+      provenance: heur.provenance,
       fieldSources: heur.fieldSources,
       lineItems: heur.lineItems,
       currency: heur.currency,
       templateFingerprint: undefined,
       model: undefined,
     };
-  else {
-    const cachedFields = lookupVendorHeuristic(invoice.vendor ?? "");
-    if (cachedFields) {
-      const mergedFields = { ...heur.fields };
-      const mergedConf = { ...heur.confidence };
-      const mergedSources = { ...heur.fieldSources };
-      for (const [k, v] of Object.entries(cachedFields)) {
-        const fk = k;
-        if (mergedFields[fk] === undefined || mergedFields[fk] === "" || mergedFields[fk] === 0) {
-          mergedFields[fk] = v;
-          mergedConf[fk] = mergedConf[fk] ?? 0.85;
-          delete mergedSources[fk];
-        }
-      }
-      if (
-        CRITICAL_HEURISTIC_FIELDS.every(
-          (f) => mergedFields[f] !== undefined && mergedFields[f] !== "" && mergedFields[f] !== 0,
-        )
-      )
-        chosen = {
-          path: "ocr",
-          fields: mergedFields,
-          confidence: mergedConf,
-          fieldSources: mergedSources,
-          lineItems: heur.lineItems,
-          currency: heur.currency,
-          templateFingerprint: undefined,
-          model: undefined,
-        };
-      else chosen = mergeVlmResult(heur, await tryVlmPath(pages, onProgress, onToken));
-    } else chosen = mergeVlmResult(heur, await tryVlmPath(pages, onProgress, onToken));
-  }
+  else chosen = mergeVlmResult(heur, await tryVlmPath(pages, onProgress, onToken));
   return await finalizeInvoice({
     file: await urlToFile(invoice.fileUrl, invoice.fileName ?? "invoice", invoice.fileType ?? ""),
     loaded: {
@@ -2235,44 +2199,53 @@ export async function runBackgroundJob(skeleton, onProgress, onToken, templates,
     templates,
   });
 }
-/** Merges heuristic and VLM results, preferring heuristic reads. */
+/** Merges heuristic (text-layer regex) and VLM results using fixed priority:
+ *   UBL / text-layer regex  >  template zone  >  VLM  >  derived
+ *
+ * When two readers disagree on a field, reconciliation picks the value
+ * consistent with subtotal + tax / line sums — see reconcileExtraction.
+ */
 export function mergeVlmResult(heur, vlmHit) {
   const prepaidToCarry = vlmHit?.prepaid ?? heur.prepaid;
   const prepaidPhraseToCarry = vlmHit?.prepaidPhrase ?? heur.prepaidPhrase;
+
+  // Start from the highest-priority reader that has data: text-layer regex.
+  const fields = { ...heur.fields };
+  const provenance = {};
+  const fieldSources = { ...heur.fieldSources };
+
+  // Carry provenance from the text-layer reader.
+  for (const field of Object.keys(fields)) {
+    provenance[field] = PROV_OCR;
+  }
+
+  // VLM fills gaps only — lower priority than text-layer regex.
   if (vlmHit) {
-    const mergedFields = { ...heur.fields };
-    const mergedConf = { ...heur.confidence };
-    const mergedSources = { ...heur.fieldSources };
     for (const [k, v] of Object.entries(vlmHit.fields)) {
       const fk = k;
-      if (mergedFields[fk] === undefined || mergedFields[fk] === "" || mergedFields[fk] === 0) {
-        mergedFields[fk] = v;
-        mergedConf[fk] = vlmHit.confidence[fk] ?? 0.9;
-        if (vlmHit.fieldSources[fk] !== undefined) mergedSources[fk] = vlmHit.fieldSources[fk];
+      if (fields[fk] === undefined || fields[fk] === "" || fields[fk] === 0) {
+        fields[fk] = v;
+        provenance[fk] = PROV_VLM;
+        if (vlmHit.fieldSources[fk] !== undefined) fieldSources[fk] = vlmHit.fieldSources[fk];
       }
     }
-    return {
-      path: "vlm",
-      fields: mergedFields,
-      confidence: mergedConf,
-      fieldSources: mergedSources,
-      lineItems: vlmHit.lineItems.length > 0 ? vlmHit.lineItems : heur.lineItems,
-      currency: vlmHit.currency ?? heur.currency,
-      templateFingerprint: undefined,
-      model: vlmHit.model,
-      prepaid: prepaidToCarry,
-      prepaidPhrase: prepaidPhraseToCarry,
-    };
   }
+
+  // Line items: prefer VLM if it found any, else heuristic.
+  const lineItems = vlmHit && vlmHit.lineItems.length > 0 ? vlmHit.lineItems : heur.lineItems;
+
+  // Currency: prefer VLM if it says something concrete.
+  const currency = vlmHit?.currency ?? heur.currency;
+
   return {
-    path: "ocr",
-    fields: heur.fields,
-    confidence: heur.confidence,
-    fieldSources: heur.fieldSources,
-    lineItems: heur.lineItems,
-    currency: heur.currency,
+    path: vlmHit ? "vlm" : "ocr",
+    fields,
+    provenance,
+    fieldSources,
+    lineItems,
+    currency,
     templateFingerprint: undefined,
-    model: undefined,
+    model: vlmHit?.model,
     prepaid: prepaidToCarry,
     prepaidPhrase: prepaidPhraseToCarry,
   };
@@ -2299,14 +2272,14 @@ export async function runDriftRecovery(skeleton, pages, onProgress, onToken, tem
         if (value === undefined || value === "") continue;
         reads[field] = {
           value,
-          confidence: vlm.confidence[field] ?? 0.7,
+          provenance: PROV_VLM,
           page: vlm.fieldSources[field] ?? 1,
         };
       }
   }
   const merged = applyDriftReads({
     fields: drift.fields,
-    confidence: drift.confidence,
+    provenance: drift.provenance,
     fieldSources: drift.fieldSources,
     missing: unresolved,
     reads,
@@ -2327,7 +2300,7 @@ export async function runDriftRecovery(skeleton, pages, onProgress, onToken, tem
       chosen: {
         path: "template",
         fields: merged.fields,
-        confidence: merged.confidence,
+        provenance: merged.provenance,
         fieldSources: merged.fieldSources,
         lineItems: drift.lineItems,
         currency: drift.currency,
@@ -2354,13 +2327,6 @@ async function urlToFile(url, name, type) {
   if (!url) return new File([new Blob()], name, { type });
   const blob = await (await fetch(url)).blob();
   return new File([blob], name, { type });
-}
-const RECONCILIATION_CONFIDENCE_FACTOR = 0.65;
-const MIN_RECONCILED_CONFIDENCE = 0.35;
-export function lowerConfidence(confidence) {
-  return Number(
-    Math.max(MIN_RECONCILED_CONFIDENCE, confidence * RECONCILIATION_CONFIDENCE_FACTOR).toFixed(2),
-  );
 }
 export function reconcileExtraction({ subtotal, tax, total, lineItems }) {
   const expected = subtotal > 0 || tax > 0 ? subtotal + tax : undefined;
@@ -2426,12 +2392,20 @@ export async function finalizeInvoice(args) {
     total,
     lineItems: chosen.lineItems,
   });
-  const adjustedConfidence = { ...chosen.confidence };
+
+  // Build final provenance per field. Reconciliation mismatches downgrade
+  // subtotal/tax/total to "derived" (computed) so the UI shows amber.
+  const finalProvenance = { ...(chosen.provenance ?? {}) };
   if (reconciliation.mismatch) {
-    for (const field of ["subtotal", "tax", "total"])
-      if (adjustedConfidence[field] !== undefined)
-        adjustedConfidence[field] = lowerConfidence(adjustedConfidence[field]);
+    for (const field of ["subtotal", "tax", "total"]) {
+      if (finalProvenance[field] !== undefined) {
+        finalProvenance[field] = PROV_DERIVED;
+      }
+    }
   }
+
+  // Cross-check: text-layer regex vs primary reader. Still useful as a
+  // verification signal — disagreements surface in the audit trail.
   let crossCheck;
   if (chosen.path !== "ocr") {
     const secondary = confirmedReads(
@@ -2439,7 +2413,6 @@ export async function finalizeInvoice(args) {
         loaded.pages.map((p) => ({
           pageNumber: p.pageNumber,
           text: p.text,
-          confidence: p.confidence,
         })),
         file.name,
       ),
@@ -2447,23 +2420,24 @@ export async function finalizeInvoice(args) {
     if (Object.keys(secondary).length > 0)
       crossCheck = compareExtractions(chosen.fields, secondary);
   }
-  const finalConfidence = applyCrossCheck(adjustedConfidence, crossCheck);
   const crossCheckDisagreements = disagreements(crossCheck);
+
   const auditAction =
     chosen.path === "template"
       ? `Template extraction (${chosen.templateFingerprint})`
       : chosen.path === "vlm"
         ? `AI vision extraction (${chosen.model ?? gemmaModel()}) — new vendor`
         : isImage
-          ? "Document scanned and fields extracted"
+          ? "Document scanned and sent to AI vision"
           : `PDF parsed — ${pageCount} page${pageCount === 1 ? "" : "s"} (${METHOD_LABEL[method]})${loaded.truncated ? `, first 20 processed` : ""}`;
   const auditNote =
     file.name +
     (chosen.path === "template"
       ? " · template match"
       : chosen.path === "vlm"
-        ? " · VLM fallback"
-        : " · OCR fallback");
+        ? " · VLM read"
+        : " · scanned to VLM");
+
   let zoneCheck;
   const sanityTemplate = templates?.[vendor];
   if (sanityTemplate?.fields && Object.keys(sanityTemplate.fields).length > 0)
@@ -2488,26 +2462,27 @@ export async function finalizeInvoice(args) {
       }
       const source = isImage ? await downscaleToJpeg(file) : loaded.pages[0]?.image;
       if (source && hasZone) {
-        const detected = await runZoneCheck(
-          source,
-          {
-            vendor,
-            invoiceNumber,
-            issueDate: issueDate || now.slice(0, 10),
-            dueDate: finalDueDate,
-            subtotal,
-            tax,
-            total,
-            currency: detectedCurrency ?? "",
-          },
-          legacyZones,
-        );
-        if (detected.length) zoneCheck = detected;
+        // Zone check no longer uses Tesseract — the VLM is the verification path.
+        // We keep the zone geometry for the draft screen's visual anchor indicators.
+        zoneCheck = Object.entries(legacyZones).map(([field, zone]) => ({
+          field: field as ZoneField,
+          ai: String(chosen.fields[field] ?? ""),
+          ocr: "",
+          match: true,
+        }));
       }
     } catch {}
+
+  // Auto-approve check: every field is exact or read, nothing derived/manual,
+  // and reconciliation passes.
+  const autoApprove =
+    Object.values(finalProvenance).every((p) => AUTO_APPROVE_PROVENANCE.has(p)) &&
+    !reconciliation.mismatch;
+
   const fieldPath = {};
   for (const f of Object.keys(chosen.fields))
     fieldPath[f] = chosen.path === "template" ? "template" : chosen.path === "vlm" ? "vlm" : "ocr";
+
   return {
     id: uid(),
     vendor,
@@ -2524,12 +2499,13 @@ export async function finalizeInvoice(args) {
     ...(businessRegistrationNumber ? { businessRegistrationNumber } : {}),
     status: "draft",
     ...(chosen.templateHold ? { templateHold: true } : {}),
+    ...(autoApprove ? { autoApproved: true } : {}),
     lineItems: chosen.lineItems,
     glAccount: GL_ACCOUNTS[0],
     department: DEPARTMENTS[0],
     memo: "",
     tags: [],
-    confidence: finalConfidence,
+    provenance: finalProvenance,
     audit: [
       {
         id: uid(),
@@ -2604,7 +2580,7 @@ export async function finalizeInvoice(args) {
     ocrPages: loaded.pages.map((p) => ({
       pageNumber: p.pageNumber,
       charCount: p.text.trim().length,
-      confidence: Number(p.confidence.toFixed(2)),
+      confidence: Number((p.image ? 0.92 : 0.98).toFixed(2)),
       method: p.method,
     })),
     fieldSources: chosen.fieldSources,
@@ -2615,7 +2591,8 @@ export async function finalizeInvoice(args) {
 }
 /** Builds a VendorTemplate from a confirmed invoice — used by the auto-learn
  * hook (see store.tsx). Operates on the cached `learnPayload` so we don't
- * re-run OCR. */
+ * re-run OCR. Only fields with provenance "exact" or "read" are learned —
+ * derived/manual fields are not reliable enough to teach the template. */
 export function buildTemplateFromInvoice(invoice) {
   const payload = invoice.learnPayload;
   if (!payload || payload.pages.length === 0) return undefined;
@@ -2624,8 +2601,10 @@ export function buildTemplateFromInvoice(invoice) {
   const vendorBlock = extractVendorBlock(words);
   if (!vendorBlock) return undefined;
   const fields = {};
-  for (const field of Object.keys(invoice.confidence)) {
-    if ((invoice.confidence[field] ?? 0) < TEMPLATE_CONFIDENCE_FLOOR) continue;
+  const provenance = invoice.provenance ?? {};
+  for (const field of Object.keys(provenance)) {
+    // Only learn from exact (text layer) or read (template/VLM) — not derived or manual.
+    if (provenance[field] !== "exact" && provenance[field] !== "read") continue;
     const value = invoice[field];
     if (value === undefined || value === "" || value === 0) continue;
     const spec = deriveAnchor(words, field, value);

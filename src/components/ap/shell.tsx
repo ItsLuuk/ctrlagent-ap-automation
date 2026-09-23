@@ -1,8 +1,6 @@
 import { Link, useRouterState } from "@tanstack/react-router";
 import { AlertTriangle, FoundryMark, IconWell, Inbox, Settings } from "@/components/icons";
 import { useEffect, type ReactNode } from "react";
-import { startVisionRuntime } from "@/lib/ai/bundled-vision";
-import { prewarmVisionModel } from "@/lib/ai/gemma";
 import { useAp } from "@/lib/ap/store";
 import { UploadDialog } from "./upload-dialog";
 import { ProcessingBadge } from "./processing-badge";
@@ -21,6 +19,8 @@ import {
   SidebarRail,
   SidebarTrigger,
 } from "@/components/ui/sidebar";
+import { prewarmVisionModel } from "@/lib/ai/gemma";
+import { startVisionRuntime } from "@/lib/ai/bundled-vision";
 
 let warmed = false;
 
@@ -30,13 +30,19 @@ export function Shell({ children }: { children: ReactNode }) {
     warmed = true;
     // Decide the vision runtime first so the warm-up aims at a live server
     // instead of racing the bundled one out of the gate. Every path resolves.
-    void startVisionRuntime().finally(() => prewarmVisionModel());
+    void startVisionRuntime().finally(() => {
+      // Best-effort: a failed warm-up does not block extraction, and a missing
+      // Ollama is the normal fallback path (Tesseract only). prewarmVisionModel
+      // already catches internally; the outer catch is defensive only.
+      try {
+        prewarmVisionModel();
+      } catch {
+        /* ignore */
+      }
+    });
   }, []);
   const pathname = useRouterState({ select: (s) => s.location.pathname });
   const isHome = pathname === "/";
-  // The first-run screen owns the one upload action there is; a second button
-  // in the shell's narrow-width bar would be the same action twice, under a
-  // slightly different name.
   const { isFirstRun } = useAp();
 
   return (

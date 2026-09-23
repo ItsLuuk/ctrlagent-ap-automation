@@ -17,7 +17,8 @@
     "tauri:info": "tauri info",
     "vision:bundle": "node scripts/fetch-vision-model.mjs",
     "test:e2e": "playwright test",
-    "test:routes": "playwright test tests/e2e/routes-smoke.spec.ts"
+    "test:routes": "playwright test tests/e2e/routes-smoke.spec.ts",
+    "test:corpus": "bun test src/lib/ap/golden-corpus.test.ts"
   },
   "overrides": {
     "rolldown": "1.2.1"

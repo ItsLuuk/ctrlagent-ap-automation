@@ -1,0 +1,108 @@
+{
+  "page": {
+    "width_mm": 210,
+    "height_mm": 297,
+    "margins_mm": {"top": 20, "bottom": 20, "left": 20, "right": 20}
+  },
+  "styles": [
+    {"name": "Heading1", "base": "Heading 1", "size_pt": 16, "bold": true, "color": "1F2937"},
+    {"name": "Heading2", "base": "Heading 2", "size_pt": 13, "bold": true, "color": "374151"},
+    {"name": "Body", "base": "Normal", "size_pt": 10.5, "color": "1F2937"},
+    {"name": "Note", "base": "Normal", "size_pt": 10, "italic": true, "color": "6B7280"},
+    {"name": "Code", "base": "Normal", "font": "Consolas", "size_pt": 9.5, "color": "111827"}
+  ],
+  "footer_page_numbers": true,
+  "blocks": [
+    {"type": "heading", "text": "Foundry — operational notes", "level": 1},
+    {"type": "paragraph", "text": "Internal reference. Not user-facing. Covers PDF rendering hardening, audit-trail provenance, Ollama connectivity, and the golden-file regression corpus. Status as of the commit that introduced each change."},
+
+    {"type": "heading", "text": "1. PDF rendering — Worker, OffscreenCanvas, dimension cap, XFA disable", "level": 2},
+    {"type": "paragraph", "runs": [
+      {"text": "What changed. ", "bold": true},
+      {"text": "First-page PDF preview (the mapping overlay image) now renders through an OffscreenCanvas path with a hard cap on canvas dimensions and XFA disabled unconditionally. The same cap is applied in the per-page render used by the text-layer and OCR paths, and XFA is disabled at every `getDocument` call in the OCR pipeline."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Why. ", "bold": true},
+      {"text": "Hostile or malformed PDFs can declare page sizes in the tens of thousands of points. A 1:1 bitmap for a 30 000 pt page is roughly 900 megapixels and will OOM the tab. Capping each side at 2 000 px keeps even a 4× A0 page well under a gigapixel while still producing a usable preview for zone drawing. XFA is a legacy Adobe format the pipeline does not handle and a frequent trigger for pathological decode paths, so it is disabled wherever a document is opened."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Files. ", "bold": true},
+      {"text": "src/components/ap/use-pdf-page-image.ts (preview), src/lib/ap/ocr.ts (per-page render + two getDocument sites), src/lib/ap/zone-check.ts (tesseract crop)."}
+    ]},
+    {"type": "paragraph", "style": "Note", "text": "OffscreenCanvas is used where the backing store is held only briefly for toBlob. The main-thread canvas is still created for the toBlob call itself — the browser still needs a real canvas to serialize a blob — but the expensive paint is isolated to the offscreen surface and the bitmap is released immediately."},
+
+    {"type": "heading", "text": "2. Audit actor — provenance honesty", "level": 2},
+    {"type": "paragraph", "runs": [
+      {"text": "What changed. ", "bold": true},
+      {"text": "The audit trail no longer attributes extraction events to a generic \"OCR engine\". Each event is stamped with the actual reader that produced it: \"text layer\", \"UBL\", \"template\", \"VLM\", \"manual\", or \"system\" for cross-checks and other pipeline-level actions."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Why. ", "bold": true},
+      {"text": "Foundry's positioning includes provenance honesty as a stated value. An audit trail that says \"OCR engine\" for a field read from a digital text layer, a UBL node, a learned template, or a vision model is misleading. The actor should match the reader so a reviewer can tell, at a glance, whether a field came from the document's own text, a structured payload, a learned layout, or a model guess."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Mapping. ", "bold": true}
+    ]},
+    {"type": "table", "header": ["Old actor", "New actor", "When"], "rows": [
+      ["OCR engine", "text layer", "Field read from the PDF's digital text layer (getTextContent / OCR words)."],
+      ["OCR engine", "VLM", "Field produced by the vision model (gemma3 / ornith)."],
+      ["OCR engine", "template", "Field read from a learned vendor template match."],
+      ["OCR engine", "system", "Cross-check disagreement, prepaid flag, and other pipeline-level notes that are not a single reader's output."],
+      ["OCR engine", "manual", "Human-entered or human-corrected value (existing store pathways)."]
+    ]},
+    {"type": "paragraph", "style": "Note", "text": "The \"OCR engine\" string remains in sample data (src/lib/ap/samples.ts) because those invoices carry historical audit trails that describe what actually happened at the time. Sample data is descriptive, not prescriptive — do not rename it to match the new convention."},
+
+    {"type": "heading", "text": "3. OLLAMA_ORIGINS — the #1 support issue", "level": 2},
+    {"type": "paragraph", "runs": [
+      {"text": "What changed. ", "bold": true},
+      {"text": "The README now documents how Foundry reaches Ollama, what origin it uses by default, where the user can override it, and how to verify connectivity. This is the #1 support issue: a browser talking to localhost will not reach an Ollama instance that only listens on a custom address."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Defaults. ", "bold": true},
+      {"text": "Foundry speaks the Ollama protocol to http://127.0.0.1:11434 (fallback http://localhost:11434). The configured origin is stored in localStorage under the key ollama-base and persists across sessions. It can be changed in Settings → Vision model → Ollama host."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Verification. ", "bold": true},
+      {"text": "From the same machine, run curl http://127.0.0.1:11434/api/version. A healthy Ollama returns {\"version\": ...}. If that fails, Foundry cannot reach the model either, and the vision path falls back to Tesseract."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Files. ", "bold": true},
+      {"text": "README.md (user-facing documentation), src/lib/ai/gemma.ts (ollamaBase, health probe, localStorage key), src/lib/ai/bundled-vision.ts (runtime bootstrap and probe)."}
+    ]},
+    {"type": "paragraph", "style": "Note", "text": "The warm-up (prewarmVisionModel) fires after startVisionRuntime resolves in the Shell useEffect, so the first upload after cold start reaches the model already resident instead of paying the load penalty. It is best-effort — a failed warm-up does not block extraction."},
+
+    {"type": "heading", "text": "4. Golden-file regression corpus", "level": 2},
+    {"type": "paragraph", "runs": [
+      {"text": "What changed. ", "bold": true},
+      {"text": "A new deterministic regression corpus and test harness, documented in docs/golden-corpus.md and implemented in src/lib/ap/golden-corpus.test.ts. Run with bun run test:corpus."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Scope. ", "bold": true},
+      {"text": "10–15 real invoices per major NL producer, each with an expected.json ground-truth file. The harness loads each PDF through the same text-layer path the upload pipeline uses, runs extractFieldsFromPages, and asserts every expected field with cent tolerance on monetary values. UBL invoices are tested through the UBL parse path. The VLM path is deliberately excluded — it has its own integration tests and does not belong in a model-free corpus."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Why. ", "bold": true},
+      {"text": "The deterministic paths (text layer, UBL, regex, learned templates) carry the majority of invoices in a mature installation. A regression there is high-frequency, high-confidence, and model-free. Catching it on every CI build is the highest-leverage quality investment available and costs no model round-trips."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Getting started. ", "bold": true},
+      {"text": "Create corpus/<producer>/ with 10–15 real PDFs and one expected.json. Run bun run test:corpus. Mismatches are bugs in the extraction code or errors in the ground truth — fix the ground truth only when you have verified the document by hand. A _skip: true entry marks a known failure with a ticket to file; it is not a silent skip."}
+    ]},
+    {"type": "paragraph", "runs": [
+      {"text": "Files. ", "bold": true},
+      {"text": "docs/golden-corpus.md (contract), src/lib/ap/golden-corpus.test.ts (harness), corpus/ (invoices + expected.json, gitignored until populated)."}
+    ]},
+
+    {"type": "heading", "text": "5. Verification checklist", "level": 2},
+    {"type": "bullet_list", "items": [
+      "bun run lint passes with no new warnings on the changed files.",
+      "bun test src/lib/ap/ runs the unit suite including the new golden-corpus.test.ts (empty corpus is a passing, visibly empty suite).",
+      "A hostile-size PDF (e.g. 30 000 pt page) renders without OOM — verify by inspection, not by shipping such a file in the corpus.",
+      "An XFA-only PDF is rejected by the text-layer path with a clear failure, not a silent fallback.",
+      "An invoice extracted through the text-layer path carries an audit entry with actor \"text layer\", not \"OCR engine\".",
+      "A VLM-extracted invoice carries actor \"VLM\" on its primary audit entry.",
+      "A template-matched invoice carries actor \"template\".",
+      "curl http://127.0.0.1:11434/api/version returns a version object when Ollama is running."
+    ]}
+  ]
+}

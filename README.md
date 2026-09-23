@@ -44,6 +44,13 @@ handoff. The system handles the routine; you handle the judgment.
 - **Reading:** PDF.js text layer · tesseract.js OCR · optional local vision models via Ollama
   (calls `127.0.0.1` only; Tesseract is the fallback when unavailable)
 - **Storage:** IndexedDB and the local filesystem — no backend, works offline
+- **Ollama connectivity:** Foundry speaks the Ollama protocol to `http://127.0.0.1:11434`
+  (or `http://localhost:11434`). The configured origin is stored in localStorage under
+  the key `ollama-base`. If you run Ollama on a non-default host or port, set it once in
+  **Settings → Vision model → Ollama host** and Foundry remembers it. This is the #1 support
+  issue: a browser talking to `localhost` will not reach an Ollama instance that only listens
+  on a custom address. Verify with `curl http://127.0.0.1:11434/api/version` from the same
+  machine.
 
 ## Getting started
 

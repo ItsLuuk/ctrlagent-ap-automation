@@ -27,6 +27,12 @@ export const DEFAULT_GEMMA_MODEL = "gemma3:4b-it-qat";
 
 const OLLAMA_HOSTS = ["http://127.0.0.1:11434", "http://localhost:11434"];
 
+/** Ollama host Foundry speaks the model protocol against. User override
+ *  lives in localStorage under `ollama-base`; the default is the standard
+ *  localhost origin. This is the #1 support issue: a browser talking to
+ *  localhost will not reach an Ollama that only listens on a custom address —
+ *  verify with `curl http://127.0.0.1:11434/api/version` from the same
+ *  machine and set the host in Settings → Vision model → Ollama host. */
 export function ollamaBase(): string {
   try {
     const saved = localStorage.getItem("ollama-base");
@@ -273,37 +279,10 @@ export function mergeGemmaPages(
   return { ...merged, pagesText };
 }
 
-/** Model-found fields score high; arithmetic mismatch on totals knocks them down. */
+/** VLM reads — every field it found gets provenance "read".
+ * The due date computed from payment terms gets "derived". */
 export function gemmaToFields(merged: MergedGemma): ExtractedFields {
-  const pageConf = 0.92;
-  const conf = (found: boolean, quality = 1) =>
-    found
-      ? Number(Math.min(0.99, pageConf * quality).toFixed(2))
-      : Number(Math.min(0.5, pageConf * 0.55).toFixed(2));
-
-  let totalQ = 1;
-  let subtotalQ = 1;
-  let taxQ = 1;
-  if (merged.subtotal && merged.tax != null && merged.total) {
-    const diff = Math.abs(merged.subtotal.value + merged.tax.value - merged.total.value);
-    if (diff > Math.max(0.05, Math.abs(merged.total.value) * 0.001)) {
-      totalQ = subtotalQ = taxQ = 0.9;
-    }
-  }
-
-  // Compute due date from payment terms when the VLM found neither an
-  // explicit due-date label nor a date value for the due-date field.
-  // Same Dutch-terms-first fallback as the regex reader, so all engines
-  // agree on what "14 dagen" means for this invoice.
-  const documentText = merged.pagesText;
-  const issueDateStr =
-    typeof merged.issueDate?.value === "string"
-      ? merged.issueDate.value
-      : undefined;
-  const dueDateFromTerms =
-    !merged.dueDate && issueDateStr
-      ? dueDateFromPaymentTerms(documentText, issueDateStr)
-      : undefined;
+  const prov = (found: boolean): Provenance => (found ? "read" : "derived");
 
   const fieldSources: Partial<Record<ExtractedField, number>> = {};
   if (merged.vendor) fieldSources.vendor = merged.vendor.page;
@@ -320,13 +299,16 @@ export function gemmaToFields(merged: MergedGemma): ExtractedFields {
   if (merged.tax) fieldSources.tax = merged.tax.page;
   if (merged.total) fieldSources.total = merged.total.page;
 
-  // When due date was computed from payment terms rather than read, the
-  // fieldSources entry stays empty (we don't know which page the terms
-  // phrase lived on in the VLM text — it may not have been on a page at
-  // all). The regex reader records the issue-date page for its computed
-  // due date; the VLM path records nothing, which is correct: this is a
-  // computation, not a read, so downstream confidence should stay at the
-  // unlabelled floor, not inherit the issue-date page's quality.
+  const documentText = merged.pagesText;
+  const issueDateStr =
+    typeof merged.issueDate?.value === "string"
+      ? merged.issueDate.value
+      : undefined;
+  const dueDateFromTerms =
+    !merged.dueDate && issueDateStr
+      ? dueDateFromPaymentTerms(documentText, issueDateStr)
+      : undefined;
+
   if (dueDateFromTerms) {
     delete fieldSources.dueDate;
   }
@@ -346,27 +328,21 @@ export function gemmaToFields(merged: MergedGemma): ExtractedFields {
     total: merged.total?.value,
     lineItems: merged.lineItems,
     currency: merged.currency,
-    confidence: {
-      vendor: conf(!!merged.vendor, 0.97),
-      address: conf(!!merged.address, 0.9),
-      vendorEmail: conf(!!merged.vendorEmail, 0.95),
-      iban: conf(!!merged.iban, 0.98),
-      vatNumber: conf(!!merged.vatNumber, 0.98),
-      businessRegistrationNumber: conf(!!merged.businessRegistrationNumber, 0.98),
-      invoiceNumber: conf(!!merged.invoiceNumber),
-      issueDate: conf(!!merged.issueDate, 0.97),
-      dueDate:
-        merged.dueDate
-          ? conf(true, 0.95)
-          : dueDateFromTerms
-            ? conf(false, 0.75)
-            : conf(false, 0.45),
-      subtotal: conf(!!merged.subtotal, 0.98 * subtotalQ),
-      tax: conf(!!merged.tax, 0.95 * taxQ),
-      total: conf(!!merged.total, 0.98 * totalQ),
+    provenance: {
+      vendor: prov(!!merged.vendor),
+      address: prov(!!merged.address),
+      vendorEmail: prov(!!merged.vendorEmail),
+      iban: prov(!!merged.iban),
+      vatNumber: prov(!!merged.vatNumber),
+      businessRegistrationNumber: prov(!!merged.businessRegistrationNumber),
+      invoiceNumber: prov(!!merged.invoiceNumber),
+      issueDate: prov(!!merged.issueDate),
+      dueDate: merged.dueDate ? "read" : dueDateFromTerms ? "derived" : "derived",
+      subtotal: prov(!!merged.subtotal),
+      tax: prov(!!merged.tax),
+      total: prov(!!merged.total),
     },
     fieldSources,
-    baseConfidence: pageConf,
   };
 }
 
