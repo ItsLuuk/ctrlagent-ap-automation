@@ -223,16 +223,19 @@ function Detail({ invoice }: { invoice: Invoice }) {
     confidence !== undefined && confidence < LOW_CONFIDENCE_THRESHOLD;
 
   /** Demo personas per phase role (until real auth exists). SoD is enforced
-   *  by the state machine, not by hiding buttons. */
+   *  by the state machine, not by hiding buttons. The `actingAs` identity is
+   *  shown on screen so the user always knows whose signature they are putting
+   *  on the record — today this names a real person the app invented, which is
+   *  the bug: two people using the same device would both sign as Dana and SoD
+   *  would compare an alias against itself. */
   const actors = {
     processor: { name: "Luuk Koppen", roles: ["processor"] } as Actor,
     approver: { name: "Dana Whitfield", roles: ["approver"] } as Actor,
     treasury: { name: "Payments", roles: ["treasury"] } as Actor,
   };
 
-  /** The persona this screen speaks for. For approval is the approver's screen,
-   *  so corrections made here are attributed to the approver — the audit trail
-   *  has to name whoever actually changed the value. */
+  /** The persona whose name goes on this screen's actions and audit entries.
+   *  Shown in the header so the user always knows who they are acting as. */
   const editor = invoice.status === "review" ? actors.approver : actors.processor;
 
   /** The comparison runs against the linked purchase order, so no link means
