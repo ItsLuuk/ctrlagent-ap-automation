@@ -779,7 +779,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
     invoice.status === "draft"
       ? "Submitting sends it to For approval — the record stays readable."
       : invoice.status === "scheduled"
-        ? "Foundry will not send money. This marks the handoff for your external process."
+        ? "Foundry will not send money. This marks the handoff for your external process. The record is locked — use Re-open below to change anything."
         : invoice.status === "rejected"
           ? "Reopening returns it to Draft for the processor to fix."
           : undefined;

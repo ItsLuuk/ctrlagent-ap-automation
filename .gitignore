@@ -44,6 +44,9 @@ test-results/
 *.local
 *.db
 
+# Dataset zip files (large test data — not committed)
+Dataset/*.zip
+
 # Python venv
 donut-service/venv/
 

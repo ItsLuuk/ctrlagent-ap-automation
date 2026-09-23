@@ -454,11 +454,12 @@ export function ApProvider({ children }: { children: ReactNode }) {
   /** Links (or unlinks) a purchase order to an invoice — a draft-phase
    *  decision that drives approval matching. Audited. Frozen records take
    *  no link either: the PO the approval matched against is part of what
-   *  was signed. */
+   *  was signed. Trying to link a frozen record returns a refusal immediately. */
   const linkPo = useCallback(
     (invoiceId: string, poId: string | undefined, actor?: string) => {
       const target = lists.current.invoices.find((inv) => inv.id === invoiceId);
-      if (target && patchRefusal(target)) return;
+      const refusal = target ? patchRefusal(target) : null;
+      if (refusal) return refusal;
       setInvoices((prev) =>
         prev.map((inv) => {
           if (inv.id !== invoiceId || inv.poId === poId) return inv;
