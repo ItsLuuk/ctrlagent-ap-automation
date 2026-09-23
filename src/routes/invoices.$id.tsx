@@ -417,6 +417,29 @@ function Detail({ invoice }: { invoice: Invoice }) {
 
   /* ── Editable pieces of the compare list ────────────────────────────── */
 
+  function lockedField(label: string, value: ReactNode) {
+    return (
+      <div className="flex flex-col gap-1 rounded-md border border-border bg-card/50 px-3 py-2">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className="text-sm font-medium">{value}</p>
+        <p className="text-xs text-muted-foreground">{lockedHint}</p>
+      </div>
+    );
+  }
+
+  const vendorValue = (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">On the document</p>
+      <p className="text-sm font-medium">{invoice.vendor}</p>
+    </div>
+  );
+  const vendorHeld = (
+    <div className="space-y-1">
+      <p className="text-xs text-muted-foreground">What we hold</p>
+      <p className="text-sm font-medium">{vendorRecord?.name ?? "No record yet"}</p>
+    </div>
+  );
+
   const checkEditors: Record<string, ReactNode> = canEdit
     ? {
         "vendor:vendorEmail": (
@@ -508,7 +531,20 @@ function Detail({ invoice }: { invoice: Invoice }) {
           </div>
         ),
       }
-    : {};
+    : {
+        "vendor:vendorEmail": lockedField("Vendor email", invoice.vendorEmail ?? "—"),
+        "vendor:address": lockedField("Address", invoice.address ?? "—"),
+        "vendor:iban": lockedField("IBAN", invoice.iban ?? "—"),
+        "vendor:vatNumber": lockedField("BTW number", invoice.vatNumber ?? "—"),
+        "vendor:businessRegistrationNumber": lockedField(
+          businessRegistrationLabel(registrationCountry(invoice.vatNumber, invoice.iban)),
+          invoice.businessRegistrationNumber ?? "—",
+        ),
+        "header:invoiceNumber": lockedField("Invoice no.", invoice.invoiceNumber),
+        "header:issueDate": lockedField("Issue date", invoice.issueDate),
+        "header:dueDate": lockedField("Due date", invoice.dueDate),
+        "header:currency": lockedField("Currency", invoice.currency),
+      };
 
   /**
    * The lines block: editable while the record is still being worked, facts once
@@ -678,7 +714,20 @@ function Detail({ invoice }: { invoice: Invoice }) {
         </p>
       ) : null}
     </div>
-  ) : null;
+  ) : (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/50 px-4 py-3">
+      <p className="text-xs font-medium text-muted-foreground">Purchase order locked</p>
+      <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+        <p className="text-xs text-muted-foreground">Linked purchase order</p>
+        <p className="text-sm font-medium">
+          {invoice.poId
+            ? purchaseOrders.find((p) => p.id === invoice.poId)?.number ?? "—"
+            : "None"}
+        </p>
+      </div>
+      <p className="text-xs text-muted-foreground">{lockedHint}</p>
+    </div>
+  );
 
   const linesEditorOpen =
     verdict.attention.some((check) => check.group === "lines") ||
