@@ -1,0 +1,24 @@
+# Linker/rust-toolchain config for this machine.
+#
+# We use the GNU Rust toolchain (stable-x86_64-pc-windows-gnu) as the host so
+# that build scripts (proc-macro2, serde, icu4* data gens, parking_lot_core,
+# thiserror, typeid, zmij...) compile against the GNU std and link with gcc.
+# This avoids the MSVC CRT symbol gap (_tls_index, _fltused, vftable, ...) that
+# the msvc std expects but MinGW's .a import libs can't provide.
+#
+# The gnu toolchain's default target is x86_64-pc-windows-gnu, and it uses
+# gcc.exe (from MSYS2 UCRT64) as its linker — with cc1, collect2, ld all from
+# the same MinGW installation, flags are GNU-style and linkable.
+#
+# MSYS2 UCRT64 gcc must be on PATH when cargo runs (it's the linker AND the C
+# compiler for build scripts that need to compile C code, e.g. ICU data gens).
+
+[build]
+# Default target for this project (also the host, via the toolchain above).
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "C:\\msys64\\ucrt64\\bin\\gcc.exe"
+ar = "C:\\msys64\\ucrt64\\bin\\ar.exe"
+# Additional library search path so gcc finds MinGW CRT / import libs.
+rustflags = ["-C", "link-args=-LC:\\msys64\\ucrt64\\lib"]

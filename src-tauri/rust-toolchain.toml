@@ -1,0 +1,15 @@
+# Pin the toolchain for the desktop shell.
+#
+# `rustup default` on this machine is the MSVC toolchain, but
+# `.cargo/config.toml` builds the *target* with x86_64-pc-windows-gnu. With an
+# MSVC host, build scripts and proc-macros (proc-macro2, serde, quote, thiserror,
+# the icu data generators) still link for the host with MSVC's `link.exe` — and
+# on PATH that name resolves to Git's coreutils `link.exe`, which fails with
+# `link: extra operand ... Try 'link --help'`. That is why no binary ever landed
+# in src-tauri/target/debug.
+#
+# Pinning the GNU toolchain here makes the host match the configured target, so
+# build scripts compile and link with MSYS2 gcc. Keep C:\msys64\ucrt64\bin on
+# PATH when running cargo/tauri (see .cargo/config.toml).
+[toolchain]
+channel = "stable-x86_64-pc-windows-gnu"

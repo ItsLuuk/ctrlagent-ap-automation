@@ -1,0 +1,308 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+/*
+ * Foundry design system — implementation in Tailwind v4 @theme.
+ * Spec: Branding/design/*. Spec tokens: radius pill/card/float/sm/input,
+ * Action Blue, Foundry Orange/Amber. One surface only — the light gallery the
+ * reviewer sits in all day.
+ */
+
+/* ── Font faces: Open Sauce One (self-hosted, spec weights only) ────── */
+@font-face {
+  font-family: "Open Sauce One";
+  src: url("/fonts/OpenSauceOne-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sauce One";
+  src: url("/fonts/OpenSauceOne-Medium.ttf") format("truetype");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sauce One";
+  src: url("/fonts/OpenSauceOne-SemiBold.ttf") format("truetype");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Open Sauce One";
+  src: url("/fonts/OpenSauceOne-Bold.ttf") format("truetype");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+@theme inline {
+  /* Motion — the one curve (Branding/design: expo-out) */
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-foundry-orange: var(--foundry-orange);
+  --color-foundry-amber: var(--foundry-amber);
+  --color-foundry-link: var(--foundry-link);
+  --color-silk: #f5f5f7;
+  --color-hairline: #d2d2d7;
+  --color-control-gray: #e6e6e8;
+  --color-steel: #86868b;
+  --color-slate: #6e6e73;
+  --color-smoke: #333336;
+  --color-ink: #1d1d1f;
+  --color-category-magenta: #cb30e0;
+  --color-category-violet: #8668ff;
+  --color-category-teal: #00a1b3;
+  --radius-pill: 9999px;
+  --radius-card: 28px;
+  --radius-float: 20px;
+  --radius-card-sm: 16px;
+  --radius-input: 12px;
+  --radius-link: 10px;
+  --radius-glass: 36px;
+  --shadow-ring: 0 0 0 1px #e6e6e8;
+  --shadow-ring-strong: 0 0 0 1px #86868b;
+  --shadow-ring-dark: 0 0 0 1px rgba(255, 255, 255, 0.08);
+  --shadow-ambient: 0 0 30px 0 rgba(16, 16, 16, 0.1);
+  --shadow-whisper:
+    0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 1px 0.5px rgba(0, 0, 0, 0.02),
+    0 3px 3px 1.5px rgba(0, 0, 0, 0.02), 0 6px 6px -3px rgba(0, 0, 0, 0.02),
+    0 12px 12px -6px rgba(0, 0, 0, 0.02), 0 24px 24px -12px rgba(0, 0, 0, 0.02);
+  --gradient-molten: linear-gradient(0deg, #f56900 0%, #f7be00 100%);
+  --gradient-prismatic: linear-gradient(
+    108deg,
+    rgb(0, 144, 247),
+    rgb(186, 98, 252) 33%,
+    rgb(242, 65, 107) 66%,
+    rgb(245, 105, 0)
+  );
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
+  --font-sans: "Open Sauce One", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Open Sauce One", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Open Sauce One", ui-monospace, monospace;
+  /* Type scale — Branding/design/typography.md, all 14 steps.
+     Weight is a utility choice (600 for heading roles), not a token. */
+  --text-micro: 0.625rem;
+  --text-micro--line-height: 1.83;
+  --text-micro--letter-spacing: -0.37px;
+  --text-caption: 0.75rem;
+  --text-caption--line-height: 1.33;
+  --text-caption--letter-spacing: -0.12px;
+  --text-nav: 0.75rem;
+  --text-nav--line-height: 1;
+  --text-nav--letter-spacing: -0.12px;
+  --text-body-sm: 0.875rem;
+  --text-body-sm--line-height: 1.29;
+  --text-body-sm--letter-spacing: -0.224px;
+  --text-body: 1.0625rem;
+  --text-body--line-height: 1.47;
+  --text-body--letter-spacing: -0.374px;
+  --text-nav-title: 1.1875rem;
+  --text-nav-title--line-height: 1.21;
+  --text-nav-title--letter-spacing: 0.228px;
+  --text-body-lg: 1.3125rem;
+  --text-body-lg--line-height: 1.19;
+  --text-body-lg--letter-spacing: 0.231px;
+  --text-heading-xs: 1.5rem;
+  --text-heading-xs--line-height: 1.17;
+  --text-heading-xs--letter-spacing: -0.24px;
+  --text-subheading: 1.75rem;
+  --text-subheading--line-height: 1.14;
+  --text-subheading--letter-spacing: 0.196px;
+  --text-heading-sm: 2rem;
+  --text-heading-sm--line-height: 1.13;
+  --text-heading-sm--letter-spacing: 0.128px;
+  --text-heading: 2.5rem;
+  --text-heading--line-height: 1.1;
+  --text-heading--letter-spacing: 0px;
+  --text-display-sm: 3.5rem;
+  --text-display-sm--line-height: 1.07;
+  --text-display-sm--letter-spacing: -0.28px;
+  --text-display: 4rem;
+  --text-display--line-height: 1.06;
+  --text-display--letter-spacing: -0.576px;
+  --text-hero: 5rem;
+  --text-hero--line-height: 1.05;
+  --text-hero--letter-spacing: -1.2px;
+  --animate-zone-flash: zone-flash 700ms var(--ease-out-expo) both;
+  --animate-field-land: field-land 500ms var(--ease-out-expo) both;
+}
+
+/* ── Foundry palette (DESIGN Foundry.md wins) ────────────────────────── */
+:root {
+  --radius: 1rem;
+
+  /* Canvas — white; alternate bands in Silk */
+  --background: #ffffff;
+  --card: #ffffff;
+  --popover: #ffffff;
+  --muted: #f5f5f7;
+  --secondary: #f5f5f7;
+
+  /* Text — Ink primary, Slate secondary */
+  --foreground: #1d1d1f;
+  --card-foreground: #1d1d1f;
+  --popover-foreground: #1d1d1f;
+  --muted-foreground: #6e6e73;
+  --secondary-foreground: #1d1d1f;
+
+  /* Action — single Action Blue fill; light-blue wash for highlights */
+  --primary: #0071e3;
+  --primary-foreground: #ffffff;
+  --accent: #e8f1fd;
+  --accent-foreground: #004999;
+
+  /* Hairlines + Steel rings; blue focus ring */
+  --border: #d2d2d7;
+  --input: #86868b;
+  --ring: #0071e3;
+
+  /* Semantic — Foundry roles only */
+  --destructive: #d92d20;
+  --destructive-foreground: #ffffff;
+  --success: #34c759;
+  --success-foreground: #0c5c22;
+  --warning: #f7be00;
+  --warning-foreground: #5c4300;
+  --info: #0071e3;
+  --info-foreground: #ffffff;
+
+  /* Foundry brand accents (text/outline only — never fills) */
+  --foundry-orange: #f56900;
+  --foundry-amber: #f7be00;
+  --foundry-link: #0066cc;
+
+  /* Sidebar — Ink */
+  --sidebar: #1d1d1f;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #0071e3;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #333336;
+  --sidebar-accent-foreground: #f5f5f7;
+  --sidebar-border: #333336;
+  --sidebar-ring: #0071e3;
+
+  /* Charts */
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+  }
+
+  /* Branded selection — Action Blue fill, white text. */
+  ::selection {
+    background-color: var(--primary);
+    color: var(--primary-foreground);
+  }
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    color: var(--color-foreground);
+    -webkit-font-smoothing: antialiased;
+    font-feature-settings: "tnum" 1;
+  }
+
+  /* Foundry: tabular numerals for every price, amount, and spec */
+  .font-mono {
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── Extraction reveal — the signature moment: extracted fields travel from
+   their document regions into the form. Zones flash in reading order; each
+   form row lands one beat later. Plays once per mount (fill: backwards, so
+   active/amber states release cleanly after the flash); the global
+   reduced-motion rule above flattens it to instant. ── */
+@keyframes zone-flash {
+  from {
+    opacity: 0;
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent);
+  }
+  55% {
+    opacity: 1;
+  }
+  to {
+    box-shadow: 0 0 0 14px transparent;
+  }
+}
+
+@keyframes field-land {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  60% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

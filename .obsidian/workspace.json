@@ -1,0 +1,301 @@
+{
+  "main": {
+    "id": "7a589bcf3212667f",
+    "type": "split",
+    "children": [
+      {
+        "id": "00db2f46a1901834",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "fee6528d66ab006e",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Future Features Backlog.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Future Features Backlog"
+            }
+          },
+          {
+            "id": "e3a9beff8156c052",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "UI and UX backlog.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "UI and UX backlog"
+            }
+          },
+          {
+            "id": "020ba3af5243a4ff",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Draft invoice mapping.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Draft invoice mapping"
+            }
+          },
+          {
+            "id": "4fc748db207fd579",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "functionality features.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "functionality features"
+            }
+          },
+          {
+            "id": "5f119bcff203e450",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "Phase flow plan.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "Phase flow plan"
+            }
+          },
+          {
+            "id": "131eef2c8dc2dded",
+            "type": "leaf",
+            "state": {
+              "type": "markdown",
+              "state": {
+                "file": "functionality features.md",
+                "mode": "source",
+                "source": false
+              },
+              "icon": "lucide-file",
+              "title": "functionality features"
+            }
+          }
+        ],
+        "currentTab": 5
+      }
+    ],
+    "direction": "vertical"
+  },
+  "left": {
+    "id": "5e0e4f15c1aee6ef",
+    "type": "split",
+    "children": [
+      {
+        "id": "c603eca119e03ed6",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "b5f013a1a1bb1d57",
+            "type": "leaf",
+            "state": {
+              "type": "file-explorer",
+              "state": {
+                "sortOrder": "alphabetical",
+                "autoReveal": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-folder-closed",
+              "title": "Verkenner"
+            }
+          },
+          {
+            "id": "037f23f5322de1e9",
+            "type": "leaf",
+            "state": {
+              "type": "search",
+              "state": {
+                "query": "",
+                "matchingCase": false,
+                "explainSearch": false,
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical"
+              },
+              "icon": "lucide-search",
+              "title": "Zoeken"
+            }
+          },
+          {
+            "id": "d5c611ceab887c06",
+            "type": "leaf",
+            "state": {
+              "type": "bookmarks",
+              "state": {
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-bookmark",
+              "title": "Bladwijzers"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300
+  },
+  "right": {
+    "id": "d331dfe11b46d3ed",
+    "type": "split",
+    "children": [
+      {
+        "id": "b3ff6f001dcee8ad",
+        "type": "tabs",
+        "children": [
+          {
+            "id": "c2306255ff9996d7",
+            "type": "leaf",
+            "state": {
+              "type": "backlink",
+              "state": {
+                "file": "BRANDING-REWORK-PLAN.md",
+                "collapseAll": false,
+                "extraContext": false,
+                "sortOrder": "alphabetical",
+                "showSearch": false,
+                "searchQuery": "",
+                "backlinkCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-coming-in",
+              "title": "Terugverwijzing"
+            }
+          },
+          {
+            "id": "4ebadff6dbebc5b5",
+            "type": "leaf",
+            "state": {
+              "type": "outgoing-link",
+              "state": {
+                "file": "BRANDING-REWORK-PLAN.md",
+                "linksCollapsed": false,
+                "unlinkedCollapsed": true
+              },
+              "icon": "links-going-out",
+              "title": "Uitgaande verwijzingen"
+            }
+          },
+          {
+            "id": "2710e88f6d9e9074",
+            "type": "leaf",
+            "state": {
+              "type": "tag",
+              "state": {
+                "sortOrder": "frequency",
+                "useHierarchy": true,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-tags",
+              "title": "Labels"
+            }
+          },
+          {
+            "id": "762e649ba51adddf",
+            "type": "leaf",
+            "state": {
+              "type": "all-properties",
+              "state": {
+                "sortOrder": "frequency",
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-archive",
+              "title": "Alle eigenschappen"
+            }
+          },
+          {
+            "id": "b3330436246e773c",
+            "type": "leaf",
+            "state": {
+              "type": "outline",
+              "state": {
+                "file": "BRANDING-REWORK-PLAN.md",
+                "followCursor": false,
+                "showSearch": false,
+                "searchQuery": ""
+              },
+              "icon": "lucide-list",
+              "title": "Overzicht"
+            }
+          }
+        ]
+      }
+    ],
+    "direction": "horizontal",
+    "width": 300,
+    "collapsed": true
+  },
+  "left-ribbon": {
+    "hiddenItems": {
+      "switcher:Open snel wisselen": false,
+      "graph:Open grafiek weergave": false,
+      "canvas:Nieuw doek aanmaken": false,
+      "daily-notes:Open de notitie van vandaag": false,
+      "templates:Sjabloon invoegen": false,
+      "command-palette:Open opdrachtenpaneel": false,
+      "bases:Nieuwe basis maken": false
+    }
+  },
+  "active": "131eef2c8dc2dded",
+  "lastOpenFiles": [
+    "src-tauri/target/debug/build/serde-83c70d2d611379e1/rustc2Zd89p/symbols.o",
+    "src-tauri/target/debug/build/serde-83c70d2d611379e1/rustc2Zd89p",
+    "src-tauri/target/debug/deps/libident_case-3f499b27dc31ea93.rmeta",
+    "src-tauri/target/debug/deps/ident_case-3f499b27dc31ea93.d",
+    "src-tauri/target/debug/deps/libstrsim-e8bfbe0a8a612c35.rlib",
+    "src-tauri/target/debug/deps/strsim-e8bfbe0a8a612c35.strsim.c2e4678e09002346-cgu.1.rcgu.o",
+    "src-tauri/target/debug/deps/strsim-e8bfbe0a8a612c35.strsim.c2e4678e09002346-cgu.2.rcgu.o",
+    "src-tauri/target/debug/deps/strsim-e8bfbe0a8a612c35.strsim.c2e4678e09002346-cgu.0.rcgu.o",
+    "src-tauri/target/debug/deps/libstrsim-e8bfbe0a8a612c35.rmeta",
+    "src-tauri/target/debug/deps/rmetaGZDTI3/full.rmeta",
+    "src-tauri/target/debug/deps/rmetaGZDTI3",
+    "Future Features Backlog.md",
+    "Pipeline rework.md",
+    "Phase flow plan.md",
+    "node_modules/eslint/node_modules/ajv/README.md",
+    "node_modules/eslint/node_modules/json-schema-traverse/README.md",
+    "docs/superpowers/plans/2026-09-20-sidebar.md",
+    "docs/superpowers/specs/2026-09-20-sidebar-design.md",
+    "docs/superpowers/plans/2026-09-20-draft-phase-redesign.md",
+    "docs/superpowers/specs/2026-09-20-draft-phase-redesign-design.md",
+    "Branding.md",
+    "BRANDING-REWORK-PLAN.md",
+    "UI and UX backlog.md",
+    "DESIGN.md",
+    "node_modules/pako/README.md",
+    "node_modules/eslint/node_modules/ajv/lib/dotjs/README.md",
+    "node_modules/@eslint/eslintrc/node_modules/json-schema-traverse/README.md",
+    "functionality features.md",
+    "Draft invoice mapping.md",
+    "Brand names.md",
+    "docs/superpowers/specs/2026-09-19-pipeline-redesign-plan.md",
+    "node_modules/h3/dist/docs/0.guide/2.api/1.h3event.md",
+    "node_modules/h3/dist/docs/0.guide/1.basics/3.handler.md",
+    "Naamloos 1.md",
+    "node_modules/bun-types/docs/README.md",
+    "node_modules/bun-types/README.md"
+  ]
+}

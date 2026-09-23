@@ -1,0 +1,36 @@
+[package]
+name = "app"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+license = ""
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+# `cdylib` is the Tauri mobile template default (Android links the shared
+# library). It is not needed for a desktop build and cannot be built here: on
+# the x86_64-pc-windows-gnu target, linking app_lib.dll fails with
+# `ld: export ordinal too large: 99962` because the Rust cdylib exports more
+# symbols than a PE export table can number. This project ships desktop only
+# (src-tauri/gen holds schemas, no android/ios project), so the rlib + staticlib
+# are enough. Restore "cdylib" alongside the mobile targets if they come back.
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+serde_json = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+log = "0.4"
+tauri = { version = "2.11.6", features = [] }
+tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-os = "2"
+tauri-plugin-shell = "2"
