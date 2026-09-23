@@ -629,7 +629,22 @@ function Detail({ invoice }: { invoice: Invoice }) {
         A department or a GL account is enough for approval — Foundry needs one dimension of coding.
       </p>
     </div>
-  ) : null;
+  ) : (
+    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/50 px-4 py-3">
+      <p className="text-xs font-medium text-muted-foreground">Coding locked</p>
+      <div className="grid gap-2 sm:grid-cols-2">
+        <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+          <p className="text-xs text-muted-foreground">Department</p>
+          <p className="text-sm font-medium">{invoice.department || "—"}</p>
+        </div>
+        <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+          <p className="text-xs text-muted-foreground">GL account</p>
+          <p className="text-sm font-medium">{invoice.glAccount || "—"}</p>
+        </div>
+      </div>
+      <p className="text-xs text-muted-foreground">{lockedHint}</p>
+    </div>
+  );
 
   const commitmentsEditor = canEdit ? (
     <div className="flex flex-wrap items-center gap-2">
