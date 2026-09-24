@@ -4,7 +4,7 @@
  * the template preview. State and interactions live in `useDraftMapping`;
  * the sibling components render one pane or dialog each.
  */
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   AlertTriangle,
   BadgeCheck,
@@ -28,7 +28,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ConfidenceChip } from "./status";
 import { ZoneCheckChip, resultFor } from "./zone-check-chip";
 import { AnchorChip, AssignPopover } from "./assign-popover";
 import { usePdfPageImage } from "./use-pdf-page-image";
@@ -352,22 +351,7 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
               showVendorImprovement={showVendorImprovement || Boolean(invoice.templateDrift)}
               revealBeats={revealBeats}
             />
-            <LineItemsField
-              invoice={invoice}
-              onChange={(lineItems) => {
-                const saved = updateInvoice(
-                  invoice.id,
-                  { lineItems },
-                  "Corrected line items",
-                  "Line items changed during draft review.",
-                );
-                if (!saved.accepted) {
-                  toast.error(saved.reason ?? "The line items could not be saved.", {
-                    description: "Nothing changed — the invoice is exactly as you left it.",
-                  });
-                }
-              }}
-            />
+            <LineItemsField invoice={invoice} />
             <ConfirmActions
               vendorName={fields.vendor || invoice.vendor}
               allFieldsVerified={allFieldsVerified}
@@ -410,7 +394,7 @@ const DRIFT_CHIP_CLASS: Record<DriftChipTone, string> = {
  * model recovered without a template anchor is called out so a person checks it.
  */
 function DriftBanner({ vendor, drift }: { vendor: string; drift: DriftInfo }) {
-  const fromText = drift.missing.filter((field) => drift.recoveredBy[field] === "ocr");
+  const fromText = drift.missing.filter((field) => drift.recoveredBy[field] === "ocr-fallback");
   const fromModel = drift.missing.filter((field) => drift.recoveredBy[field] === "vlm");
   const stillMissing = drift.missing.filter((field) => drift.recoveredBy[field] === undefined);
   const recoveredCount = fromText.length + fromModel.length;
@@ -788,13 +772,16 @@ function FieldsPane({
               <div key={li.id} className="flex items-center justify-between gap-2 text-xs">
                 <span className="truncate">{li.description}</span>
                 <span className="font-mono text-muted-foreground shrink-0">
-                  {li.quantity} × {money(li.unitPrice, invoice.currency)} = {money(li.amount, invoice.currency)}
+                  {li.quantity} × {money(li.unitPrice, invoice.currency)} ={" "}
+                  {money(li.amount, invoice.currency)}
                 </span>
               </div>
             ))}
             <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-border/60">
               <span className="text-xs font-medium text-muted-foreground">Lines total</span>
-              <span className={`font-mono text-xs font-semibold ${crossCheck.ok ? "text-foreground" : "text-warning-foreground"}`}>
+              <span
+                className={`font-mono text-xs font-semibold ${crossCheck.ok ? "text-foreground" : "text-warning-foreground"}`}
+              >
                 {money(crossCheck.sum, invoice.currency)}
               </span>
             </div>
@@ -805,13 +792,56 @@ function FieldsPane({
   );
 }
 
-function LineItemsField({
-  invoice,
-  onChange,
-}: {
-  invoice: Invoice;
-  onChange: (items: Invoice["lineItems"]) => void;
-}) {
+function LineItemsField({ invoice }: { invoice: Invoice }) {
+  const { updateInvoice } = useAp();
+
+  /** Line-item edits land per keystroke, so the commit (and its audit entry)
+   *  waits for a pause instead of writing one entry per character. The invoice
+   *  id rides along with the pending items: navigating away mid-pause must
+   *  flush to the invoice that was actually edited, not the newly opened one. */
+  const lineItemTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingLineItems = useRef<Invoice["lineItems"] | null>(null);
+  const pendingInvoiceId = useRef<string | null>(null);
+
+  const commitLineItems = () => {
+    const next = pendingLineItems.current;
+    const id = pendingInvoiceId.current;
+    pendingLineItems.current = null;
+    pendingInvoiceId.current = null;
+    if (!next || !id) return;
+    const saved = updateInvoice(
+      id,
+      { lineItems: next },
+      "Corrected line items",
+      "Line items changed during draft review.",
+    );
+    if (!saved.accepted) {
+      toast.error(saved.reason ?? "The line items could not be saved.", {
+        description: "Nothing changed — the invoice is exactly as you left it.",
+      });
+    }
+  };
+
+  /** Debounced write — also carries add/delete through the same pause. */
+  const onLineItemsChange = (items: Invoice["lineItems"]) => {
+    pendingLineItems.current = items;
+    pendingInvoiceId.current = invoice.id;
+    if (lineItemTimer.current) clearTimeout(lineItemTimer.current);
+    lineItemTimer.current = setTimeout(commitLineItems, 700);
+  };
+
+  // Flush pending edits when the invoice id changes or the field unmounts, so
+  // a pause in typing never strands (or mis-targets) the last keystrokes.
+  useEffect(
+    () => () => {
+      if (lineItemTimer.current) clearTimeout(lineItemTimer.current);
+      lineItemTimer.current = null;
+      commitLineItems();
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [invoice.id],
+  );
+
   return (
     <section
       aria-labelledby="draft-line-items-title"
@@ -832,7 +862,7 @@ function LineItemsField({
         items={invoice.lineItems}
         currency={invoice.currency}
         editable
-        onChange={onChange}
+        onChange={onLineItemsChange}
         subtotal={invoice.subtotal}
         tax={invoice.tax}
         invoiceTotal={invoice.total}
@@ -939,7 +969,6 @@ function FieldRow({
             <AnchorChip anchor={assignment.anchor} />
           ) : null}
           <ZoneCheckChip result={resultFor(invoice.zoneCheck, field)} />
-          <ConfidenceChip value={invoice.confidence[field]} />
         </div>
       </div>
 
