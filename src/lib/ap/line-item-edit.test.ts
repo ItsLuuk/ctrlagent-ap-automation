@@ -3,9 +3,9 @@ import { parseLineItemDraft } from "./line-item-edit";
 
 describe("parseLineItemDraft", () => {
   it("parses a valid draft and computes amount", () => {
-    expect(
-      parseLineItemDraft({ description: "Widget", quantity: "2", unitPrice: "10.5" }),
-    ).toEqual({ ok: true, description: "Widget", quantity: 2, unitPrice: 10.5, amount: 21 });
+    expect(parseLineItemDraft({ description: "Widget", quantity: "2", unitPrice: "10.5" })).toEqual(
+      { ok: true, description: "Widget", quantity: 2, unitPrice: 10.5, amount: 21 },
+    );
   });
 
   it("trims description and accepts comma decimal separator", () => {
@@ -15,9 +15,13 @@ describe("parseLineItemDraft", () => {
   });
 
   it("accepts comma decimal separator in quantity", () => {
-    expect(
-      parseLineItemDraft({ description: "Widget", quantity: "2,5", unitPrice: "4" }),
-    ).toEqual({ ok: true, description: "Widget", quantity: 2.5, unitPrice: 4, amount: 10 });
+    expect(parseLineItemDraft({ description: "Widget", quantity: "2,5", unitPrice: "4" })).toEqual({
+      ok: true,
+      description: "Widget",
+      quantity: 2.5,
+      unitPrice: 4,
+      amount: 10,
+    });
   });
 
   it("rejects blank description", () => {
