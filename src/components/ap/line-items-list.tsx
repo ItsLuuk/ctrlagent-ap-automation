@@ -43,7 +43,7 @@ function RowFields({
   deleteButton?: React.ReactNode;
 }) {
   const descRef = useRef<HTMLInputElement>(null);
-  const qty = Number(quantity) || 0;
+  const qty = Number(quantity.replace(",", ".")) || 0;
   const price = Number(unitPrice.replace(",", ".")) || 0;
   const amount = qty * price;
 
@@ -271,7 +271,7 @@ export function LineItemsList({
 
   const commitNewRow = useCallback(() => {
     if (!onChange) return;
-    const qty = Number(newQty) || 0;
+    const qty = Number(newQty.replace(",", ".")) || 0;
     const price = Number(newPrice.replace(",", ".")) || 0;
     const amount = qty * price;
     if (!newDesc.trim() || amount <= 0) {
