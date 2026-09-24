@@ -185,7 +185,8 @@ function EditableRow({
     (draft: LineItemDraft) => {
       const parsed = parseLineItemDraft(draft);
       if (!parsed.ok) return; // invalid → local input keeps typed text, no upstream write
-      onCommit({ ...item, ...parsed });
+      const { ok: _ok, ...valid } = parsed;
+      onCommit({ ...item, ...valid });
     },
     [item, onCommit],
   );
