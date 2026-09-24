@@ -16,9 +16,9 @@ import { uid, money, type LineItem, GL_ACCOUNTS, DEPARTMENTS } from "@/lib/ap/ty
 import { colorClasses } from "@/lib/colors";
 import { EmptyState } from "@/components/ap/primitives";
 
-/* ── Inline editable row ───────────────────────────────────────────── */
+/* ── Shared editable field cells ────────────────────────────────────── */
 
-function InlineEditRow({
+function RowFields({
   description,
   quantity,
   unitPrice,
@@ -28,6 +28,7 @@ function InlineEditRow({
   onUnitPriceChange,
   autoFocus,
   isLast,
+  deleteButton,
 }: {
   description: string;
   quantity: string;
@@ -38,6 +39,7 @@ function InlineEditRow({
   onUnitPriceChange: (v: string) => void;
   autoFocus?: boolean;
   isLast: boolean;
+  deleteButton?: React.ReactNode;
 }) {
   const descRef = useRef<HTMLInputElement>(null);
   const qty = Number(quantity) || 0;
@@ -54,7 +56,7 @@ function InlineEditRow({
   return (
     <div
       className={cn(
-        "grid items-center gap-2 px-4 py-2.5 sm:grid-cols-[1fr_70px_100px_90px_32px]",
+        "group grid items-center gap-2 px-4 py-2.5 sm:grid-cols-[1fr_70px_100px_90px_32px]",
         !isLast && "border-b border-border/60",
       )}
     >
@@ -93,8 +95,8 @@ function InlineEditRow({
         {amount > 0 ? money(amount, currency) : ""}
       </span>
 
-      {/* Spacer for delete button column */}
-      <span />
+      {/* Delete or spacer */}
+      {deleteButton ?? <span />}
     </div>
   );
 }
@@ -287,7 +289,7 @@ export function LineItemsList({
 
           {/* New row being added */}
           {adding && (
-            <InlineEditRow
+            <RowFields
               description={newDesc}
               quantity={newQty}
               unitPrice={newPrice}
