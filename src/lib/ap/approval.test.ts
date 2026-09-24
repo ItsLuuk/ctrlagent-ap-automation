@@ -83,7 +83,7 @@ const baseInvoice: Invoice = {
   department: "Engineering",
   memo: "",
   tags: [],
-  confidence: { vendor: 0.95, invoiceNumber: 0.9, total: 0.9 },
+  provenance: { vendor: "read", invoiceNumber: "read", total: "read" },
   audit: [],
   source: "sample",
   createdAt: "2026-09-19T00:00:00Z",

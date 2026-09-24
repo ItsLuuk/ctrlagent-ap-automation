@@ -75,10 +75,10 @@ async function filesFromNativePaths(paths: string[]): Promise<File[]> {
  * rest skip, so a single dropped PDF becomes one record instead of one per
  * mounted instance: the twin the queue kept flagging as a duplicate was this.
  * The native timestamp is also read by the dialog card, which must ignore the
- * browser drop event that follows Tauri's own.
+ * DOM drop event that follows Tauri's native event.
  */
 let lastNativeDropAt = 0;
-let lastBrowserDropAt = 0;
+let lastDomDropAt = 0;
 
 export function UploadDialog({
   size,
@@ -86,7 +86,14 @@ export function UploadDialog({
   /** Trigger weight — the first-run action is the hero, the header one is not. */
   size?: ButtonProps["size"];
 }) {
-  const { addInvoice, applyTransition, templates, vendors } = useAp();
+  const {
+    addInvoice,
+    applyTransition,
+    templates,
+    vendors,
+    businessProfile,
+    findTemplateMatch: lookupTemplate,
+  } = useAp();
   const { enqueue } = useUploadJobs();
   const inputRef = useRef<HTMLInputElement>(null);
   const [open, setOpen] = useState(false);
@@ -169,6 +176,8 @@ export function UploadDialog({
               setProgress(Math.max(5, Math.round(p.progress * 100)));
             },
             templatesRef.current,
+            businessProfile,
+            lookupTemplate,
           );
           if (result.kind === "processing") {
             // The skeleton invoice lands in the inbox with a processing row,
@@ -192,7 +201,11 @@ export function UploadDialog({
             const routed: Invoice = { ...invoice, status: initialStatus };
             addInvoice(routed);
             applyTransition(routed.id, {
-              transition: "register-profile",
+              // Two capture-time entry points, one per routing outcome: the
+              // vendor decision above owns which one runs, so a known vendor
+              // lands in Draft instead of being pulled back into registration.
+              transition:
+                initialStatus === "vendor_profile" ? "register-profile" : "route-known-vendor",
               actor: { name: "system", roles: ["system"] },
               note:
                 initialStatus === "vendor_profile"
@@ -222,7 +235,7 @@ export function UploadDialog({
             department: "",
             memo: "",
             tags: [],
-            confidence: {},
+            provenance: {},
             audit: [
               {
                 id: uid(),
@@ -321,9 +334,9 @@ export function UploadDialog({
   handleFilesRef.current = handleFiles;
 
   // Tauri's native window drop event provides filesystem paths rather than
-  // browser DataTransfer files. Convert those paths into File objects so the
+  // DOM DataTransfer files. Convert those paths into File objects so the
   // desktop path uses the exact same extraction, persistence, and navigation
-  // pipeline as the web picker and browser drag/drop path.
+  // pipeline as the WebView picker and DOM drag/drop path.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false;
@@ -367,8 +380,9 @@ export function UploadDialog({
     };
   }, []);
 
-  // The browser has no native window drop, so "drop a PDF anywhere in this
-  // window" is wired here — the same gesture the desktop gets from Tauri above.
+  // The non-Tauri test harness has no native window drop, so "drop a PDF
+  // anywhere in this window" is wired here — the same gesture the desktop gets
+  // from Tauri above.
   // The dialog card stops propagation on its own drop, so the two cannot both
   // take the same file.
   useEffect(() => {
@@ -385,8 +399,8 @@ export function UploadDialog({
       const dropped = Array.from(e.dataTransfer?.files ?? []);
       if (dropped.length === 0) return;
       // Another instance of this dialog already captured this gesture.
-      if (Date.now() - lastBrowserDropAt < 1000) return;
-      lastBrowserDropAt = Date.now();
+      if (Date.now() - lastDomDropAt < 1000) return;
+      lastDomDropAt = Date.now();
       // A document dropped anywhere is a request to capture it, dialog open or
       // not — same rule as the native path.
       if (!openRef.current) setOpen(true);
@@ -422,7 +436,7 @@ export function UploadDialog({
         department: "",
         memo: "",
         tags: [],
-        confidence: {},
+        provenance: {},
         audit: [
           {
             id: uid(),
@@ -538,13 +552,13 @@ export function UploadDialog({
             }}
             onDrop={(e) => {
               e.preventDefault();
-              // The window listens too (browser build): one drop, one capture.
+              // The window listens too (WebView path): one drop, one capture.
               e.stopPropagation();
               dragDepthRef.current = 0;
               setDragging(false);
-              // Tauri can deliver both its native path event and the browser
+              // Tauri can deliver both its native path event and the WebView
               // drop event. The native event is authoritative; ignore the
-              // browser duplicate that arrives in the same gesture.
+              // WebView duplicate that arrives in the same gesture.
               if (Date.now() - lastNativeDropAt < 1000) return;
               // While a batch is running the drop zone shows progress instead;
               // ignore drops rather than interleaving two loops.

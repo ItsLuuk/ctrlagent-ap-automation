@@ -19,7 +19,7 @@ const base = (over: Partial<Invoice> = {}): Invoice =>
     department: "",
     memo: "",
     tags: [],
-    confidence: {},
+    provenance: {},
     audit: [],
     source: "upload",
     createdAt: new Date(0).toISOString(),

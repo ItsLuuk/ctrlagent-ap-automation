@@ -1,7 +1,7 @@
 /**
  * Shared file-type detection for invoice source documents.
  *
- * `File.type` is unreliable: drag-dropped PDFs on some OS/browser combos
+ * `File.type` is unreliable: drag-dropped PDFs on some OS/WebView combos
  * arrive with an empty `type`, while the upload pipeline (`ocr.ts`) already
  * detects PDFs by filename fallback. The overlay/preview code must use the
  * same logic or PDFs get misclassified as "unsupported file type" even when

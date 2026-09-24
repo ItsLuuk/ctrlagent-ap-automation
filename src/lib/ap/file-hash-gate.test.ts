@@ -47,7 +47,7 @@ function stubInvoice(
     department: "",
     memo: "",
     tags: [],
-    confidence: {},
+    provenance: {},
     audit: [],
     source,
     fileHash,
@@ -137,7 +137,7 @@ describe("checkFileHash", () => {
 
 describe("recordFileHash", () => {
   it("persists a new hash into the known set", () => {
-    if (typeof localStorage === "undefined") return; // skip in non-browser env
+    if (typeof localStorage === "undefined") return; // skip in non-app test environments
     clearHashStore();
     const before = readKnownHashes();
     expect(before.size).toBe(0);
@@ -148,7 +148,7 @@ describe("recordFileHash", () => {
   });
 
   it("deduplicates when the same hash is recorded twice", () => {
-    if (typeof localStorage === "undefined") return; // skip in non-browser env
+    if (typeof localStorage === "undefined") return; // skip in non-app test environments
     clearHashStore();
     recordFileHash("dup-hash");
     recordFileHash("dup-hash");

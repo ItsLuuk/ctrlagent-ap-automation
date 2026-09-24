@@ -1,1 +1,96 @@
-/**\n * Renders the first page of a PDF to a temporary image blob URL so the\n * mapping overlay (zone drawing, click-to-assign) can work for PDF uploads,\n * not just images. The PDF blob URL returned by the upload pipeline can't\n * be fed into an <img> tag directly — pdfjs must rasterize it first.\n *\n * For image invoices the caller still uses the original `fileUrl` directly;\n * this hook is only activated for PDFs that also carry OCR words (meaning\n * the upload pipeline has already processed them and `learnPayload` exists).\n *\n * Rendering uses an OffscreenCanvas to keep the main-thread bitmap off the\n * critical path, caps dimensions before allocation so hostile PDFs can't\n * blow the tab's memory budget, and disables XFA unconditionally.\n */\nimport { useEffect, useState } from \"react\";\nimport { isPdfInvoice } from \"@/lib/ap/file-type\";\nimport \"@/lib/ap/pdfjs-polyfill\";\n\n// eslint-disable-next-line @typescript-eslint/no-explicit-any\ntype PdfDoc = any;\n\n/** Hard cap per side, in pixels. Hostile/malformed PDFs can declare page sizes\n *  in the tens of thousands of points; a 1:1 bitmap for a 30 000 pt page is\n *  ~900 megapixels and will OOM the tab. When the natural viewport exceeds\n *  the cap we scale down — the preview remains usable for zone drawing.\n *\n *  Arbitrarily chosen large enough for readable zone overlays on A4/Letter,\n *  small enough that even 4× A0 at 1:1 stays well under a gigapixel. */\nconst MAX_CANVAS_PX = 2000;\n\n/** Target scale for a typical A4/Letter page; the cap clamps anything larger. */\nconst TARGET_SCALE = 1.5;\n\nexport function usePdfPageImage(\n  fileUrl: string | undefined,\n  fileType: string | undefined,\n  hasWords: boolean,\n  /** Filename fallback for uploads stored with an empty `fileType`. */\n  fileName?: string | undefined,\n): string | undefined | null {\n  const isPdf = isPdfInvoice(fileType, fileName) && !!fileUrl;\n  const [blobUrl, setBlobUrl] = useState<string | undefined | null>(undefined);\n\n  useEffect(() => {\n    if (!isPdf || !fileUrl || !hasWords) return;\n    let cancelled = false;\n    let pdfDoc: PdfDoc | undefined;\n\n    (async () => {\n      try {\n        const pdfjs = await import(\"pdfjs-dist\");\n        if (!pdfjs.GlobalWorkerOptions.workerPort) {\n          const WorkerWrapper = await import(\"../../lib/ap/pdf-worker?worker\");\n          pdfjs.GlobalWorkerOptions.workerPort = new WorkerWrapper.default();\n        }\n        const resp = await fetch(fileUrl);\n        if (!resp.ok) throw new Error(`fetch ${resp.status}`);\n        const buffer = await resp.arrayBuffer();\n        pdfDoc = await pdfjs.getDocument({\n          data: buffer,\n          disableXfa: true,\n        }).promise;\n\n        const page = await pdfDoc.getPage(1);\n        const natural = page.getViewport({ scale: 1 });\n        const scale = Math.min(\n          TARGET_SCALE,\n          MAX_CANVAS_PX / natural.width,\n          MAX_CANVAS_PX / natural.height,\n        );\n        const viewport = page.getViewport({ scale });\n        const width = Math.min(Math.ceil(viewport.width), MAX_CANVAS_PX);\n        const height = Math.min(Math.ceil(viewport.height), MAX_CANVAS_PX);\n\n        // OffscreenCanvas keeps the backing store off the main-thread compositor\n        // path for the duration of the render; we still end up with a main-thread\n        // canvas to call toBlob on, but the expensive paint is isolated.\n        const offscreen = new OffscreenCanvas(width, height);\n        await page.render({ canvas: offscreen, viewport }).promise;\n\n        // Transfer the rendered bitmap back to a real canvas solely for toBlob.\n        const canvas = document.createElement(\"canvas\");\n        canvas.width = width;\n        canvas.height = height;\n        const ctx = canvas.getContext(\"2d\")!;\n        ctx.drawImage(offscreen, 0, 0);\n        offscreen.close();\n\n        const blob = await new Promise<Blob | null>((resolve) =>\n          canvas.toBlob(resolve, \"image/png\"),\n        );\n        canvas.width = canvas.height = 0;\n        if (!blob) throw new Error(\"canvas.toBlob returned null\");\n        if (!cancelled) setBlobUrl(URL.createObjectURL(blob));\n      } catch (err) {\n        // Surface the failure instead of hanging on \"Rendering the first page…\".\n        console.warn(\"[pdf-preview] rasterization failed\", err);\n        if (!cancelled) setBlobUrl(null);\n      } finally {\n        await pdfDoc?.destroy().catch(() => {});\n      }\n    })();\n\n    return () => {\n      cancelled = true;\n    };\n  }, [isPdf, fileUrl, hasWords]);\n\n  if (blobUrl === null) return null; // render attempted and failed\n  return blobUrl;\n}\n
+import { useEffect, useState } from "react";
+import { isPdfInvoice } from "@/lib/ap/file-type";
+import "@/lib/ap/pdfjs-polyfill";
+
+/** Hard cap per side, in pixels, before allocating a preview bitmap. */
+const MAX_CANVAS_PX = 2000;
+
+/** Target scale for a typical A4/Letter page. */
+const TARGET_SCALE = 1.5;
+
+/**
+ * Renders the first page of a PDF to a temporary image blob URL so the mapping
+ * overlay works for PDF uploads as well as image uploads.
+ *
+ * PDF.js performs document parsing in its worker. Canvas dimensions are capped
+ * before allocation so malformed page-size declarations cannot exhaust the
+ * WebView's memory.
+ */
+export function usePdfPageImage(
+  fileUrl: string | undefined,
+  fileType: string | undefined,
+  hasWords: boolean,
+  /** Filename fallback for uploads stored with an empty `fileType`. */
+  fileName?: string | undefined,
+): string | undefined | null {
+  const isPdf = isPdfInvoice(fileType, fileName) && Boolean(fileUrl);
+  const [blobUrl, setBlobUrl] = useState<string | undefined | null>(undefined);
+
+  useEffect(() => {
+    if (!isPdf || !fileUrl || !hasWords) {
+      setBlobUrl(undefined);
+      return;
+    }
+
+    let cancelled = false;
+    let objectUrl: string | undefined;
+    let loadingTask: import("pdfjs-dist").PDFDocumentLoadingTask | undefined;
+
+    void (async () => {
+      try {
+        const pdfjs = await import("pdfjs-dist");
+        if (!pdfjs.GlobalWorkerOptions.workerPort) {
+          const WorkerWrapper = await import("../../lib/ap/pdf-worker?worker");
+          pdfjs.GlobalWorkerOptions.workerPort = new WorkerWrapper.default();
+        }
+
+        const response = await fetch(fileUrl);
+        if (!response.ok) throw new Error(`fetch ${response.status}`);
+        const data = await response.arrayBuffer();
+
+        loadingTask = pdfjs.getDocument({ data });
+        const pdfDoc = await loadingTask.promise;
+        const page = await pdfDoc.getPage(1);
+        const natural = page.getViewport({ scale: 1 });
+        const scale = Math.min(
+          TARGET_SCALE,
+          MAX_CANVAS_PX / natural.width,
+          MAX_CANVAS_PX / natural.height,
+        );
+        const viewport = page.getViewport({ scale });
+        const width = Math.max(1, Math.min(Math.ceil(viewport.width), MAX_CANVAS_PX));
+        const height = Math.max(1, Math.min(Math.ceil(viewport.height), MAX_CANVAS_PX));
+
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        await page.render({ canvas, viewport }).promise;
+
+        const blob = await new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, "image/png"),
+        );
+        canvas.width = 0;
+        canvas.height = 0;
+        if (!blob) throw new Error("canvas.toBlob returned null");
+
+        if (!cancelled) {
+          objectUrl = URL.createObjectURL(blob);
+          setBlobUrl(objectUrl);
+        }
+      } catch (error) {
+        console.warn("[pdf-preview] rasterization failed", error);
+        if (!cancelled) setBlobUrl(null);
+      } finally {
+        await loadingTask?.destroy().catch(() => {});
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [fileUrl, hasWords, isPdf]);
+
+  if (blobUrl === null) return null;
+  return blobUrl;
+}

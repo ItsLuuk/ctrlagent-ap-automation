@@ -43,7 +43,7 @@ function HistoryPage() {
         />
       </div>
 
-      <div className="mt-6 rounded-lg border border-border bg-card">
+      <div className="mt-6 rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs  text-muted-foreground">

@@ -12,7 +12,7 @@ const OWN_BUSINESS: BusinessProfile = {
 };
 
 function pages(text: string): PageRead[] {
-  return [{ pageNumber: 1, text, confidence: 0.95 }];
+  return [{ pageNumber: 1, text }];
 }
 
 describe("business profile filtering", () => {

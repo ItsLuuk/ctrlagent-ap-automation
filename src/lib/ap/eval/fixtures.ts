@@ -30,11 +30,7 @@ export type Fixture =
       expected: FieldValues;
     };
 
-const page = (pageNumber: number, text: string, confidence = 0.95): PageRead => ({
-  pageNumber,
-  text,
-  confidence,
-});
+const page = (pageNumber: number, text: string): PageRead => ({ pageNumber, text });
 
 function word(text: string, x: number, y: number, w: number, h = 0.03, confidence = 0.95): OcrWord {
   return { text, x, y, w, h, confidence };

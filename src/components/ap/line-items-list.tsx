@@ -13,7 +13,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Plus, X } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { uid, money, type LineItem, GL_ACCOUNTS, DEPARTMENTS } from "@/lib/ap/types";
-import { colorClasses } from "@/lib/colors";
 import { EmptyState } from "@/components/ap/primitives";
 import { parseLineItemDraft, type LineItemDraft } from "@/lib/ap/line-item-edit";
 
@@ -46,6 +45,8 @@ function RowFields({
   const qty = Number(quantity.replace(",", ".")) || 0;
   const price = Number(unitPrice.replace(",", ".")) || 0;
   const amount = qty * price;
+  const inputClass =
+    "h-9 w-full min-w-0 rounded-md border border-border bg-background px-2.5 text-sm outline-none transition-colors placeholder:text-muted-foreground/60 hover:border-ring focus-visible:border-ring focus-visible:bg-background focus-visible:ring-2 focus-visible:ring-ring/25";
 
   useEffect(() => {
     if (!autoFocus) return;
@@ -57,47 +58,47 @@ function RowFields({
   return (
     <div
       className={cn(
-        "group grid items-center gap-2 px-4 py-2.5 sm:grid-cols-[1fr_70px_100px_90px_32px]",
+        "group relative grid grid-cols-2 items-center gap-2 px-4 py-3 pr-10 transition-colors hover:bg-secondary/20 sm:grid-cols-[minmax(160px,1fr)_52px_92px_110px] sm:gap-3 sm:py-3",
         !isLast && "border-b border-border/60",
       )}
     >
-      {/* Description */}
       <input
         ref={descRef}
         type="text"
+        aria-label="Description"
         value={description}
         onChange={(e) => onDescriptionChange(e.target.value)}
         placeholder="Description"
-        className="min-w-0 truncate rounded-sm bg-transparent text-sm outline-none placeholder:text-muted-foreground/50 focus-visible:bg-accent/60"
+        className={cn(inputClass, "col-span-2 w-full min-w-0 font-medium sm:col-span-1")}
       />
-
-      {/* Quantity */}
       <input
         type="text"
+        aria-label="Quantity"
         inputMode="numeric"
         value={quantity}
         onChange={(e) => onQuantityChange(e.target.value)}
         placeholder="1"
-        className="w-full rounded-sm bg-transparent font-mono text-sm text-right outline-none placeholder:text-muted-foreground/50 focus-visible:bg-accent/60"
+        className={cn(inputClass, "w-full text-right font-mono tabular-nums")}
       />
-
-      {/* Unit price */}
       <input
         type="text"
+        aria-label="Unit price"
         inputMode="decimal"
         value={unitPrice}
         onChange={(e) => onUnitPriceChange(e.target.value)}
         placeholder="0.00"
-        className="w-full rounded-sm bg-transparent font-mono text-sm text-right outline-none placeholder:text-muted-foreground/50 focus-visible:bg-accent/60"
+        className={cn(inputClass, "w-full text-right font-mono tabular-nums")}
       />
-
-      {/* Amount (computed, read-only) */}
-      <span className="font-mono text-sm text-right text-foreground">
-        {amount > 0 ? money(amount, currency) : ""}
-      </span>
-
-      {/* Delete or spacer */}
-      {deleteButton ?? <span />}
+      <input
+        type="text"
+        aria-label="Amount"
+        readOnly
+        value={amount > 0 ? money(amount, currency) : "—"}
+        className="h-9 w-full min-w-0 rounded-md border border-border bg-muted/20 px-2.5 text-right font-mono text-sm font-medium tabular-nums outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+      />
+      {deleteButton && (
+        <div className="absolute right-1 top-1/2 -translate-y-1/2">{deleteButton}</div>
+      )}
     </div>
   );
 }
@@ -117,44 +118,46 @@ function DisplayRow({
   onDelete?: (() => void) | undefined;
   isLast: boolean;
 }) {
+  const deleteButton =
+    editable && onDelete ? (
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          onDelete();
+        }}
+        className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
+        aria-label={`Remove ${item.description}`}
+      >
+        <X className="size-3.5" />
+      </button>
+    ) : undefined;
+
   return (
     <div
       className={cn(
-        "group grid items-center gap-2 px-4 py-2.5 sm:grid-cols-[1fr_70px_100px_90px_32px]",
+        "group relative grid grid-cols-2 items-center gap-2 px-4 py-3 pr-10 transition-colors hover:bg-secondary/20 sm:grid-cols-[minmax(160px,1fr)_52px_92px_110px] sm:gap-3 sm:py-3",
         !isLast && "border-b border-border/60",
       )}
     >
-      {/* Description */}
-      <span className="truncate text-sm font-medium">{item.description}</span>
-
-      {/* Quantity */}
-      <span className="font-mono text-sm text-right text-muted-foreground">{item.quantity}</span>
-
-      {/* Unit price */}
-      <span className="font-mono text-sm text-right text-muted-foreground">
+      <span className="col-span-2 min-w-0 truncate text-sm font-medium sm:col-span-1">
+        {item.description}
+      </span>
+      <span className="min-w-0 truncate text-right font-mono text-sm tabular-nums text-muted-foreground">
+        {item.quantity}
+      </span>
+      <span className="min-w-0 truncate text-right font-mono text-sm tabular-nums text-muted-foreground">
         {money(item.unitPrice, currency)}
       </span>
-
-      {/* Amount */}
-      <span className="font-mono text-sm text-right font-medium">
-        {money(item.amount, currency)}
-      </span>
-
-      {/* Delete */}
-      {editable && onDelete ? (
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onDelete();
-          }}
-          className="justify-self-end rounded-sm p-1 text-muted-foreground/0 transition-colors ease-out-expo hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground"
-          aria-label={`Remove ${item.description}`}
-        >
-          <X className="size-3.5" />
-        </button>
-      ) : (
-        <span />
+      <input
+        type="text"
+        aria-label="Amount"
+        readOnly
+        value={money(item.amount, currency)}
+        className="h-9 w-full min-w-0 rounded-md border border-border bg-muted/20 px-2.5 text-right font-mono text-sm font-medium tabular-nums outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25"
+      />
+      {deleteButton && (
+        <div className="absolute right-1 top-1/2 -translate-y-1/2">{deleteButton}</div>
       )}
     </div>
   );
@@ -198,7 +201,7 @@ function EditableRow({
         e.stopPropagation();
         onDelete();
       }}
-      className="justify-self-end rounded-sm p-1 text-muted-foreground/0 transition-colors ease-out-expo hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground"
+      className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted-foreground/60 transition-colors hover:bg-destructive/10 hover:text-destructive focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100"
       aria-label={`Remove ${description || item.description}`}
     >
       <X className="size-3.5" />
@@ -233,13 +236,18 @@ function EditableRow({
 
 function ColumnHeader() {
   return (
-    <div className="hidden grid-cols-[1fr_70px_100px_90px_32px] gap-2 border-b border-border bg-secondary/50 px-4 py-2 text-[11px] font-medium  text-muted-foreground sm:grid">
-      <span>Description</span>
-      <span className="text-right">Qty</span>
-      <span className="text-right">Unit price</span>
-      <span className="text-right">Amount</span>
-      <span />
-    </div>
+    <>
+      <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2 text-[11px] font-medium text-muted-foreground sm:hidden">
+        <span>Item</span>
+        <span>Amounts</span>
+      </div>
+      <div className="hidden grid-cols-[minmax(160px,1fr)_52px_92px_110px] gap-3 border-b border-border bg-muted/30 px-4 py-2.5 pr-10 text-[11px] font-medium text-muted-foreground sm:grid">
+        <span>Description</span>
+        <span className="text-right">Qty</span>
+        <span className="text-right">Unit price</span>
+        <span className="text-right">Amount</span>
+      </div>
+    </>
   );
 }
 
@@ -253,6 +261,7 @@ export function LineItemsList({
   subtotal,
   tax,
   invoiceTotal,
+  showTotals = true,
 }: {
   items: LineItem[];
   currency: string;
@@ -261,6 +270,8 @@ export function LineItemsList({
   subtotal?: number | undefined;
   tax?: number | undefined;
   invoiceTotal?: number | undefined;
+  /** The receipt provides its own totals block when false. */
+  showTotals?: boolean;
 }) {
   /** When non-null, a new row is being added inline. */
   const [adding, setAdding] = useState(false);
@@ -331,7 +342,7 @@ export function LineItemsList({
   return (
     <div className="overflow-hidden">
       {/* Column headers (desktop only) */}
-      {items.length > 0 && <ColumnHeader />}
+      {(items.length > 0 || adding) && <ColumnHeader />}
 
       {/* Rows */}
       {isEmpty ? (
@@ -392,71 +403,75 @@ export function LineItemsList({
           )}
 
           {/* Reconciliation footer — lines vs subtotal / tax / total */}
-          <div className="border-t border-border bg-secondary/50 px-4 py-2.5">
-            {(() => {
-              const linesMatch =
-                subtotal !== undefined && subtotal > 0
-                  ? Math.abs(total - subtotal) <= 0.02
-                  : invoiceTotal !== undefined
-                    ? Math.abs(total - invoiceTotal) <= 0.02
+          {showTotals && (
+            <div className="border-t border-border bg-secondary/50 px-4 py-2.5">
+              {(() => {
+                const linesMatch =
+                  subtotal !== undefined && subtotal > 0
+                    ? Math.abs(total - subtotal) <= 0.02
+                    : invoiceTotal !== undefined
+                      ? Math.abs(total - invoiceTotal) <= 0.02
+                      : true;
+                const totalsMatch =
+                  subtotal !== undefined &&
+                  tax !== undefined &&
+                  invoiceTotal !== undefined &&
+                  (subtotal > 0 || tax > 0)
+                    ? Math.abs(subtotal + tax - invoiceTotal) <= 0.02
                     : true;
-              const totalsMatch =
-                subtotal !== undefined &&
-                tax !== undefined &&
-                invoiceTotal !== undefined &&
-                (subtotal > 0 || tax > 0)
-                  ? Math.abs(subtotal + tax - invoiceTotal) <= 0.02
-                  : true;
-              const row = "flex items-center justify-between py-0.5";
-              const label = "text-xs text-muted-foreground";
-              const val = "font-mono text-xs font-medium";
-              return (
-                <div>
-                  <div className={row}>
-                    <span className="text-xs font-semibold  text-muted-foreground">
-                      Lines total
-                    </span>
-                    <span className="flex items-center gap-1.5 font-mono text-sm font-semibold">
-                      {money(total, currency)}
-                      <span
-                        className={linesMatch ? "text-foreground" : "text-foundry-orange"}
-                        aria-label={linesMatch ? "lines match" : "lines differ"}
-                      >
-                        {linesMatch ? "✓" : "!"}
+                const row =
+                  "grid w-full grid-cols-[minmax(0,1fr)_minmax(7rem,45%)] items-center gap-3 py-1";
+                const label = "text-xs text-muted-foreground";
+                const val =
+                  "flex h-8 w-full min-w-0 items-center justify-end rounded-md border border-border bg-background px-2.5 text-right font-mono text-xs font-medium tabular-nums";
+                return (
+                  <div>
+                    <div className={row}>
+                      <span className="text-xs font-semibold  text-muted-foreground">
+                        Lines total
                       </span>
-                    </span>
-                  </div>
-                  {subtotal !== undefined &&
-                    tax !== undefined &&
-                    invoiceTotal !== undefined &&
-                    (subtotal > 0 || tax > 0) && (
-                      <div className="mt-1 space-y-0.5 border-t border-border/60 pt-1.5">
-                        <div className={row}>
-                          <span className={label}>Subtotal</span>
-                          <span className={val}>{money(subtotal, currency)}</span>
-                        </div>
-                        <div className={row}>
-                          <span className={label}>Tax</span>
-                          <span className={val}>{money(tax, currency)}</span>
-                        </div>
-                        <div className={row}>
-                          <span className={label}>Total</span>
-                          <span className={`${val} flex items-center gap-1.5`}>
-                            {money(invoiceTotal, currency)}
-                            <span
-                              className={totalsMatch ? "text-foreground" : "text-foundry-orange"}
-                              aria-label={totalsMatch ? "totals match" : "totals differ"}
-                            >
-                              {totalsMatch ? "✓" : "!"}
+                      <span className="flex items-center gap-1.5 font-mono text-sm font-semibold">
+                        {money(total, currency)}
+                        <span
+                          className={linesMatch ? "text-foreground" : "text-warning-foreground"}
+                          aria-label={linesMatch ? "lines match" : "lines differ"}
+                        >
+                          {linesMatch ? "✓" : "!"}
+                        </span>
+                      </span>
+                    </div>
+                    {subtotal !== undefined &&
+                      tax !== undefined &&
+                      invoiceTotal !== undefined &&
+                      (subtotal > 0 || tax > 0) && (
+                        <div className="mt-1 space-y-0.5 border-t border-border/60 pt-1.5">
+                          <div className={row}>
+                            <span className={label}>Subtotal</span>
+                            <span className={val}>{money(subtotal, currency)}</span>
+                          </div>
+                          <div className={row}>
+                            <span className={label}>Tax</span>
+                            <span className={val}>{money(tax, currency)}</span>
+                          </div>
+                          <div className={row}>
+                            <span className={label}>Total</span>
+                            <span className={`${val} flex items-center gap-1.5`}>
+                              {money(invoiceTotal, currency)}
+                              <span
+                                className={totalsMatch ? "text-foreground" : "text-warning-foreground"}
+                                aria-label={totalsMatch ? "totals match" : "totals differ"}
+                              >
+                                {totalsMatch ? "✓" : "!"}
+                              </span>
                             </span>
-                          </span>
+                          </div>
                         </div>
-                      </div>
-                    )}
-                </div>
-              );
-            })()}
-          </div>
+                      )}
+                  </div>
+                );
+              })()}
+            </div>
+          )}
         </>
       )}
 
@@ -465,10 +480,10 @@ export function LineItemsList({
         <button
           type="button"
           onClick={handleAdd}
-          className="flex w-full items-center justify-center gap-1.5 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground active:bg-secondary"
+          className="flex w-full items-center justify-start gap-2 border-t border-border/60 px-4 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
         >
           <Plus className="size-3.5" />
-          Add item
+          Add line item
         </button>
       )}
 

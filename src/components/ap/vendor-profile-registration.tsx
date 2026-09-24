@@ -18,7 +18,7 @@ import { ReviewHeader } from "./review-header";
 import { Shell } from "./shell";
 import { VendorProfileCard } from "./vendor-profile-card";
 import { useAp } from "@/lib/ap/store";
-import { TRANSITION_LABEL, type Actor } from "@/lib/ap/state-machine";
+import { TRANSITION_LABEL } from "@/lib/ap/state-machine";
 import type { Invoice, Zone, ZoneField } from "@/lib/ap/types";
 import { isImageInvoice } from "@/lib/ap/file-type";
 import { suggestZone } from "@/lib/ap/mapping";
@@ -34,15 +34,11 @@ import {
   type VendorMaster,
 } from "@/lib/ap/vendor-master";
 
-/**
- * Demo processor actor. Real auth is not in scope; the audit trail has to name
- * someone. The processor role is the only one allowed to confirm a profile
- * (state-machine TRANSITIONS rule).
- */
-const PROCESSOR_ACTOR: Actor = { name: "Luuk Koppen", roles: ["processor"] };
-
 export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
-  const { upsertVendor, updateInvoice, applyTransition, vendors } = useAp();
+  // The one person running this install confirms the profile, and the audit
+  // entry carries their name. The processor role is the only one the
+  // `vendor-profile-confirmed` rule admits (state-machine TRANSITIONS).
+  const { upsertVendor, updateInvoice, applyTransition, vendors, operator } = useAp();
   const navigate = useNavigate();
   const storeRecord = vendors[invoice.vendor];
   const [profileDraft, setProfileDraft] = useState<VendorMaster>(
@@ -126,7 +122,7 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
           {},
           `Corrected ${profileFieldLabel(field, finalRecord)} on vendor profile`,
           `was "${from || "empty"}" → "${to || "empty"}"`,
-          PROCESSOR_ACTOR.name,
+          operator.name,
         );
       }
       upsertVendor(finalRecord);
@@ -139,7 +135,7 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
           { department: finalRecord.department, vendor: finalRecord.name },
           "Vendor profile fields carried into invoice",
           `department default from profile: ${finalRecord.department}`,
-          PROCESSOR_ACTOR.name,
+          operator.name,
         );
       } else if (finalRecord.name !== invoice.vendor) {
         // Carry the (possibly operator-corrected) name forward so the vendor
@@ -151,7 +147,7 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
 
       const result = applyTransition(invoice.id, {
         transition: "vendor-profile-confirmed",
-        actor: PROCESSOR_ACTOR,
+        actor: operator,
         note: `Profile saved for ${finalRecord.name}`,
       });
       if (!result.accepted) {
@@ -181,7 +177,7 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
     try {
       const result = applyTransition(invoice.id, {
         transition: "vendor-profile-rejected",
-        actor: PROCESSOR_ACTOR,
+        actor: operator,
         note: reason.trim(),
       });
       if (!result.accepted) {
@@ -221,8 +217,8 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
     <Shell>
       <ReviewHeader invoice={invoice} />
 
-      <div className="mt-5 rounded-xl border border-foundry-orange/40 bg-foundry-orange/5 p-4">
-        <p className="text-xs font-medium uppercase tracking-[0.16em] text-foundry-orange">
+      <div className="mt-5 rounded-xl border border-warning/40 bg-warning/5 p-4">
+        <p className="text-xs font-medium uppercase tracking-[0.16em] text-warning-foreground">
           Vendor profile registration
         </p>
         <p className="mt-1 text-sm font-medium">
@@ -238,7 +234,7 @@ export function VendorProfileRegistration({ invoice }: { invoice: Invoice }) {
       {/* The same two panes the review screen uses: the document pinned on the
           left, the fields being checked against it on the right. */}
       <div className="mt-5 grid gap-5 pb-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-        <section className="self-start overflow-hidden rounded-lg border border-border bg-card lg:sticky lg:top-2">
+        <section className="self-start overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)] lg:sticky lg:top-2">
           <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-2.5">
             <p className="text-xs font-medium text-muted-foreground">Document</p>
             <p className="truncate text-xs text-muted-foreground">

@@ -2,7 +2,7 @@
  * Extraction eval — runner.
  *
  * Drives each fixture through the *real* deterministic stage of the pipeline
- * it exercises, then scores the result. Browser-only stages (canvas
+ * it exercises, then scores the result. Desktop-runtime-only stages (canvas
  * preprocessing, Tesseract, the Ollama/llama HTTP call) are out of scope: the
  * fixtures carry the OCR text / raw model JSON those stages would have
  * produced, so the parsing and field-mapping code under test is the same code

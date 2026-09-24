@@ -1,0 +1,51 @@
+name: Tauri packaged smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  packaged-windows:
+    name: Build and launch packaged Tauri app
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install JavaScript dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Prepare optional Tauri resource directories
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force `
+            -Path "src-tauri/resources/runtime", "src-tauri/resources/models" | Out-Null
+
+      - name: Build packaged Tauri app
+        run: bun run tauri:build
+
+      - name: Launch packaged Tauri app
+        shell: pwsh
+        run: |
+          $executable = Get-ChildItem `
+            -Path "$env:GITHUB_WORKSPACE\src-tauri\target\release" `
+            -Filter "*.exe" `
+            | Where-Object { $_.Name -in @("Foundry.exe", "app.exe") } `
+            | Select-Object -First 1
+          if ($null -eq $executable) {
+            throw "No packaged Tauri executable was produced."
+          }
+          & "$env:GITHUB_WORKSPACE\scripts\tauri-packaged-smoke.ps1" `
+            -ExecutablePath $executable.FullName

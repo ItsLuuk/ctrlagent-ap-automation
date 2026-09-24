@@ -8,11 +8,7 @@ import {
 } from "./ocr";
 
 /** Tiny inline page factory so the OCR-parser tests don't need pdfjs. */
-const page = (pageNumber: number, text: string, confidence = 0.95) => ({
-  pageNumber,
-  text,
-  confidence,
-});
+const page = (pageNumber: number, text: string) => ({ pageNumber, text });
 
 describe("MONEY_RE (ocr.ts §66)", () => {
   it("matches Dutch 2-decimal amounts", () => {

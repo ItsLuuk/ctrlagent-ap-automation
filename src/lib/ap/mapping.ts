@@ -55,8 +55,6 @@ const ROW_BREAK_FACTOR = 1.2;
 const FALLBACK_ROW_HEIGHT = 0.012;
 /** Line items whose sum-vs-total difference is within this count as matching. */
 export const SUM_MATCH_TOLERANCE = 0.02;
-/** Confidence at or above this reads as green in the triage list. */
-export const CONFIDENT_THRESHOLD = 0.75;
 /** Padding fractions defining the page quadrants used in human summaries. */
 const QUADRANT = { left: 0.4, right: 0.6, top: 0.25, bottom: 0.75 } as const;
 /** Longest description kept per parsed line item (matches pipeline limits). */
@@ -348,23 +346,21 @@ export type FieldStatus = "amber" | "green";
 
 /**
  * Triage per the design doc: greens need a glance, ambers are the work.
- * Amber when confidence is low, the sanity check disagreed, or the value is
- * empty. A missing confidence with a heuristic-path value also counts as
- * amber so those fields get a look.
+ * Derived values, failed sanity checks, and empty values need a person's look.
  */
 export function fieldStatus(
   invoice: Invoice,
   field: ZoneField,
   opts?: { zoneCheckMatch?: boolean | undefined },
 ): FieldStatus {
-  const confidence = invoice.confidence[field];
-  if (confidence !== undefined && confidence < CONFIDENT_THRESHOLD) return "amber";
+  // A human correction is the resolution of the original read. Keep the old
+  // zone-check result for audit/history, but do not keep the field amber after
+  // the reviewer has explicitly replaced it.
+  if (invoice.provenance?.[field] === "manual") return "green";
   if (opts?.zoneCheckMatch === false) return "amber";
   const value = fieldValue(invoice, field);
   if (value === "" || value === 0) return "amber";
-  if (confidence === undefined && (invoice.engine === "ocr" || invoice.engine === undefined)) {
-    return "amber";
-  }
+  if (invoice.provenance?.[field] === "derived") return "amber";
   return "green";
 }
 

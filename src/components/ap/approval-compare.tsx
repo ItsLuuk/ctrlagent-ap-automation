@@ -12,7 +12,6 @@
  */
 import { useState, type ReactNode } from "react";
 import { ChevronDown, Crosshair, Pencil } from "@/components/icons";
-import { ConfidenceChip } from "./status";
 import { ZoneCheckChip } from "./zone-check-chip";
 import { List, ListItem, Pill, Section, SectionHeader } from "./primitives";
 import { cn } from "@/lib/utils";
@@ -93,13 +92,14 @@ function CheckRow({
   const counterpart = check.heldValue;
   const twoColumn = counterpart !== undefined && !evidence;
   const soleValue = counterpart ?? check.documentValue;
-  // Confidence and page numbers describe how we read the *document*; they mean
+  // The source page describes where the document value was read; it means
   // nothing beside our own record.
-  const meta = !evidence && (check.sourcePage !== undefined || check.confidence !== undefined);
+  const meta = !evidence && check.sourcePage !== undefined;
   const zoneChip =
     check.zoneCheck && field !== undefined ? (
       <ZoneCheckChip
         result={check.zoneCheck}
+        verified={check.corrected}
         {...(focusable ? { onFocus: () => onFocus(field) } : {})}
       />
     ) : null;
@@ -144,7 +144,6 @@ function CheckRow({
                   p.{check.sourcePage}
                 </span>
               ) : null}
-              {meta ? <ConfidenceChip value={check.confidence} /> : null}
               {zoneChip}
             </p>
           ) : null}
@@ -163,7 +162,6 @@ function CheckRow({
                     p.{check.sourcePage}
                   </span>
                 ) : null}
-                {meta ? <ConfidenceChip value={check.confidence} /> : null}
                 {zoneChip}
               </p>
             ) : null}

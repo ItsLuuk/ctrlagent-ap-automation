@@ -4,6 +4,7 @@ import {
   availableTransitions,
   describeTransitionError,
   isFrozen,
+  handoffMarkerInForce,
   lastDecision,
   patchRefusal,
   restoreRecord,
@@ -15,6 +16,7 @@ import {
   TRANSITION_LABEL,
   type Actor,
 } from "./state-machine";
+import { SOLE_USER } from "./operator";
 import type { Invoice } from "./types";
 
 const processor: Actor = { name: "Patty Processor", roles: ["processor"] };
@@ -27,7 +29,7 @@ const invoice = (status: Invoice["status"], audit: Invoice["audit"] = []): Invoi
     status,
     audit,
     lineItems: [],
-    confidence: {},
+    provenance: {},
   }) as unknown as Invoice;
 
 const auditEntry = (action: string, actor = "someone") => ({
@@ -168,6 +170,26 @@ describe("segregation of duties", () => {
     if (!r.ok) expect(r.error.kind).toBe("role");
   });
 
+  // The install the app actually ships as. Foundry has no accounts, so the only
+  // processor is the person who saved the vendor profile — and when the exemption
+  // is missing the invoice can never leave Draft, because no other actor in the
+  // app may confirm it: the approver persona fails the role gate and the system
+  // actor is not offered by any screen.
+  it("lets the operator who saved the vendor profile confirm that invoice", () => {
+    const operator: Actor = { name: "Luuk Koppen", roles: ["processor"] };
+    const saved = invoice("draft", [
+      auditEntry(TRANSITION_LABEL["vendor-profile-confirmed"], operator.name),
+    ]);
+
+    // The duty split the exemption exists for: without it, this is the dead end.
+    expect(transition(saved, { transition: "confirm", actor: operator }).ok).toBe(false);
+    expect(
+      transition(saved, { transition: "confirm", actor: operator, soleUser: SOLE_USER }).ok,
+    ).toBe(true);
+    // The UI asks the same question through availableTransitions.
+    expect(availableTransitions(saved, operator, { soleUser: SOLE_USER })).toContain("confirm");
+  });
+
   it("availableTransitions accepts soleUser option", () => {
     const sole: Actor = {
       name: "Sole Finance",
@@ -268,6 +290,28 @@ describe("vendor profile registration phase", () => {
   it("rejects register-profile when not run by the system actor", () => {
     const r = transition(invoice("processing"), {
       transition: "register-profile",
+      actor: processor,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.kind).toBe("role");
+  });
+
+  // The capture-time routing decision has two outcomes, so it has two entry
+  // points. A single `register-profile` call for both dragged every known
+  // vendor's invoice back into registration while its audit note claimed the
+  // invoice had entered Draft.
+  it("route-known-vendor is a system-only entry point that lands in Draft", () => {
+    const r = transition(invoice("draft"), {
+      transition: "route-known-vendor",
+      actor: SYSTEM_ACTOR,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.result.status).toBe("draft");
+  });
+
+  it("rejects route-known-vendor when not run by the system actor", () => {
+    const r = transition(invoice("draft"), {
+      transition: "route-known-vendor",
       actor: processor,
     });
     expect(r.ok).toBe(false);
@@ -475,5 +519,35 @@ describe("the decision a record sits on", () => {
 
   it("is undefined on a record that was never decided", () => {
     expect(lastDecision(invoice("draft", [auditEntry(TRANSITION_LABEL.confirm)]))).toBeUndefined();
+  });
+});
+
+describe("handoffMarkerInForce", () => {
+  it("counts a marker written after the approval it belongs to", () => {
+    const inv = invoice("scheduled", [
+      auditEntry(TRANSITION_LABEL.confirm, "Patty Processor"),
+      auditEntry(TRANSITION_LABEL.approve, "Dana Whitfield"),
+      auditEntry(TRANSITION_LABEL.release, "Payments"),
+    ]);
+    expect(handoffMarkerInForce(inv)).toBe(true);
+  });
+
+  it("ignores a marker left over from before a re-open and a second approval", () => {
+    // The bug this pins: the old marker is still in the history, so a scan of
+    // the whole audit reports a handoff that the current decision never earned —
+    // and the screen then offers no way to mark the real one.
+    const inv = invoice("scheduled", [
+      auditEntry(TRANSITION_LABEL.approve, "Dana Whitfield"),
+      auditEntry(TRANSITION_LABEL.release, "Payments"),
+      auditEntry(TRANSITION_LABEL["re-open"], "Dana Whitfield"),
+      auditEntry(TRANSITION_LABEL.approve, "Sam de Vries"),
+    ]);
+    expect(lastDecision(inv)?.actor).toBe("Sam de Vries");
+    expect(handoffMarkerInForce(inv)).toBe(false);
+  });
+
+  it("is true on a record marked for handoff with no decision of its own", () => {
+    const inv = invoice("scheduled", [auditEntry(TRANSITION_LABEL.release, "Sam de Vries")]);
+    expect(handoffMarkerInForce(inv)).toBe(true);
   });
 });

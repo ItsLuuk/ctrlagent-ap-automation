@@ -7,6 +7,7 @@ import {
   ClipboardPaste,
   MoreVertical,
   Pencil,
+  Save,
   AlertTriangle,
   UserSearch,
 } from "@/components/icons";
@@ -326,7 +327,7 @@ function IbanField({
           IBAN
           {required ? (
             <>
-              <span aria-hidden className="ml-0.5 text-foundry-orange">
+              <span aria-hidden className="ml-0.5 text-warning-foreground">
                 *
               </span>
               <span className="sr-only"> (required)</span>
@@ -340,14 +341,14 @@ function IbanField({
             </span>
           ) : validity.tone !== "idle" ? (
             <span className="inline-flex items-center gap-1 text-xs font-semibold text-foreground">
-              <AlertTriangle className="size-3 text-foundry-orange" /> Check
+              <AlertTriangle className="size-3 text-warning-foreground" /> Check
             </span>
           ) : null}
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            className="h-7 gap-1 rounded-full px-2 text-xs text-foundry-link"
+            className="h-7 gap-1 rounded-full px-2 text-xs text-primary"
             onClick={pasteFromClipboard}
             title="Paste IBAN from clipboard"
           >
@@ -436,7 +437,10 @@ function IbanField({
               maxLength={bankLen}
               placeholder={cfg?.bankPlaceholder ?? "RABO"}
               className={`${iosInput} w-full font-mono font-semibold uppercase sm:min-w-0 sm:flex-1`}
-              value={showCustomBank ? (bankIsListed ? "" : bank) : bank}
+              // Always the segment of the IBAN the field is part of. Blanking it
+              // while custom mode was on left the bank box empty next to a
+              // complete, valid IBAN and a readout that still showed the code.
+              value={bank}
               onChange={(e) => {
                 setBankCustom(true);
                 reassemble({ bank: e.target.value });
@@ -496,6 +500,9 @@ function IbanField({
 export function VendorProfileCard({
   vendor,
   onChange,
+  onSave,
+  saveLabel = "Save changes",
+  saving = false,
   focusField,
   onFocusDone,
   requiredFields,
@@ -504,6 +511,10 @@ export function VendorProfileCard({
 }: {
   vendor: VendorMaster;
   onChange: (field: ProfileField, value: string) => void;
+  /** Persist the edited profile. Rendered as the card's primary footer action. */
+  onSave?: (() => void) | undefined;
+  saveLabel?: string | undefined;
+  saving?: boolean | undefined;
   focusField: ProfileField | null;
   onFocusDone: () => void;
   /** Fields the current phase gates on — marked with a required asterisk. */
@@ -516,7 +527,7 @@ export function VendorProfileCard({
   const requiredMark = (field: ProfileField) =>
     required(field) ? (
       <>
-        <span aria-hidden className="ml-0.5 text-foundry-orange">
+        <span aria-hidden className="ml-0.5 text-warning-foreground">
           *
         </span>
         <span className="sr-only"> (required)</span>
@@ -552,7 +563,11 @@ export function VendorProfileCard({
     return (
       <Section>
         <div className="flex items-center gap-3 px-4 py-3">
-          <VendorLogo vendor={vendor.name} className="size-10 text-xs" />
+          <VendorLogo
+            vendor={vendor.name}
+            department={vendor.department}
+            className="size-10 text-xs"
+          />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{vendor.name || "Unknown vendor"}</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
@@ -730,6 +745,22 @@ export function VendorProfileCard({
             />
           </label>
         </div>
+        {onSave && (
+          <div className="flex items-center justify-end border-t border-border px-4 py-3">
+            <Button
+              type="button"
+              size="sm"
+              onClick={() => {
+                onSave();
+                setExpanded(false);
+              }}
+              disabled={saving}
+            >
+              <Save className="size-3.5" />
+              {saving ? "Saving…" : saveLabel}
+            </Button>
+          </div>
+        )}
       </div>
     </Section>
   );

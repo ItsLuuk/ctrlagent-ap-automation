@@ -71,7 +71,6 @@ export type ApprovalCheck = {
   detail?: string | undefined;
   /** 1-based page the document value was read from, when known. */
   sourcePage?: number | undefined;
-  confidence?: number | undefined;
   zoneCheck?: ZoneCheckResult | undefined;
   /** Field whose value region the row can highlight in the document. */
   field?: ZoneField | undefined;
@@ -191,9 +190,8 @@ function identityChecks(invoice: Invoice, record: VendorMaster | undefined): App
   // it up — the amount and header rows, not just the identity ones.
   const base = (
     field: ZoneField,
-  ): Pick<ApprovalCheck, "sourcePage" | "confidence" | "zoneCheck"> => ({
+  ): Pick<ApprovalCheck, "sourcePage" | "zoneCheck"> => ({
     sourcePage: invoice.fieldSources?.[field],
-    confidence: invoice.confidence[field],
     zoneCheck: invoice.zoneCheck?.find((z) => z.field === field),
   });
 
@@ -341,7 +339,6 @@ function blockingRow(invoice: Invoice, issue: InvoiceValidationIssue): ApprovalC
         heldValue: `Invoice total ${money(invoice.total, currency)}`,
         field: "total",
         sourcePage: invoice.fieldSources?.total,
-        confidence: invoice.confidence.total,
         zoneCheck: invoice.zoneCheck?.find((z) => z.field === "total"),
       };
     case "missing_coding":
@@ -428,7 +425,6 @@ function headerChecks(
       ...(issue ? { detail: ISSUE_FACT[issue.code] } : {}),
       field,
       sourcePage: invoice.fieldSources?.[field],
-      confidence: invoice.confidence[field],
       zoneCheck: invoice.zoneCheck?.find((z) => z.field === field),
     };
   });
@@ -480,7 +476,6 @@ function amountCheck(invoice: Invoice, issue: InvoiceValidationIssue | undefined
     detail: issue ? totals.fact : totals.detail || undefined,
     field: "total",
     sourcePage: invoice.fieldSources?.total,
-    confidence: invoice.confidence.total,
     zoneCheck: invoice.zoneCheck?.find((z) => z.field === "total"),
   };
 }

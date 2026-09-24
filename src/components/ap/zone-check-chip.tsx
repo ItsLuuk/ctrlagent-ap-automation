@@ -13,16 +13,20 @@ export function ZoneCheckChip({
   result,
   currency,
   onFocus,
+  verified = false,
   className,
 }: {
   result: ZoneCheckResult | undefined;
   currency?: string | undefined;
   onFocus?: () => void;
+  /** The reviewer corrected this field after the original comparison. */
+  verified?: boolean | undefined;
   className?: string | undefined;
 }) {
   if (!result) return null;
   const { field, ai, ocr, match } = result;
-  const tone = match
+  const agrees = verified || match;
+  const tone = agrees
     ? "bg-success/15 text-success-foreground"
     : "bg-warning/15 text-warning-foreground";
   const displayAi = ai || "(empty)";
@@ -42,9 +46,11 @@ export function ZoneCheckChip({
       type="button"
       onClick={onFocus}
       title={
-        match
-          ? `Read twice: the value and the document text agree for ${fieldLabel(field)}.`
-          : `Read twice: the extracted value "${formattedAi}" doesn't match the document text "${formattedOcr}" for ${fieldLabel(field)}.`
+        verified
+          ? `Verified: you corrected ${fieldLabel(field)} after comparing it with the document.`
+          : match
+            ? `Read twice: the value and the document text agree for ${fieldLabel(field)}.`
+            : `Read twice: the extracted value "${formattedAi}" doesn't match the document text "${formattedOcr}" for ${fieldLabel(field)}.`
       }
       className={cn(
         "inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-xs font-medium",
@@ -52,11 +58,13 @@ export function ZoneCheckChip({
         className,
       )}
     >
-      {match ? <Check className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
+      {agrees ? <Check className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
       <span className="font-mono">
-        {match
-          ? `✓ ${fieldLabel(field)} · text agrees`
-          : `✗ ${fieldLabel(field)} · text differs: ${truncate(formattedOcr)}`}
+        {verified
+          ? `✓ ${fieldLabel(field)} · verified`
+          : match
+            ? `✓ ${fieldLabel(field)} · text agrees`
+            : `✗ ${fieldLabel(field)} · text differs: ${truncate(formattedOcr)}`}
       </span>
     </button>
   );

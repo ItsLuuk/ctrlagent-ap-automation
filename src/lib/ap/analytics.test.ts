@@ -10,7 +10,7 @@ const invoice = (over: Partial<Invoice> = {}): Invoice =>
     total: 1000,
     status: "paid",
     lineItems: [],
-    confidence: {},
+    provenance: {},
     audit: [],
     createdAt: "2026-09-01T00:00:00Z",
     ...over,

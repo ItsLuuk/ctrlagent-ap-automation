@@ -1,7 +1,7 @@
 /**
  * Purchase-order store (plan §1.1, §5 "pull early").
  *
- * In-browser stand-in for the ERP vendor-master/PO pull: persists POs in
+ * Local app stand-in for the ERP vendor-master/PO pull: persists POs in
  * localStorage and offers the same lookup surface the ERP sync layer will
  * implement later (find by vendor, find by id). When real ERP integration
  * lands, only this module's read/write functions change — the matching

@@ -12,6 +12,7 @@ import {
   Cpu,
   FileText,
   Layers,
+  type Icon,
   Loader2,
   ScanLine,
   Stamp,
@@ -21,8 +22,22 @@ import { cn } from "@/lib/utils";
 import { STATUS_LABEL, STATUS_ORDER, type InvoiceStatus } from "@/lib/ap/types";
 import { STATUS_TONES, colorClasses } from "@/lib/colors";
 
+/** Match the phase marks used by the invoice widget. */
+const STATUS_ICONS: Record<InvoiceStatus, Icon> = {
+  vendor_profile: Building2,
+  draft: FileText,
+  review: Stamp,
+  scheduled: Stamp,
+  rejected: X,
+  paid: Check,
+  archived: FileText,
+  processing: Loader2,
+  failed: X,
+};
+
 export function StatusBadge({ status, className }: { status: InvoiceStatus; className?: string }) {
   const tone = STATUS_TONES[status];
+  const Icon = STATUS_ICONS[status];
   return (
     <span
       className={cn(
@@ -32,24 +47,8 @@ export function StatusBadge({ status, className }: { status: InvoiceStatus; clas
         className,
       )}
     >
+      <Icon className="size-3" />
       {STATUS_LABEL[status]}
-    </span>
-  );
-}
-
-export function ConfidenceChip({ value }: { value?: number | undefined }) {
-  if (value === undefined) return null;
-  const pct = Math.round(value * 100);
-  const low = value < 0.75;
-  return (
-    <span
-      className={cn(
-        "rounded-sm px-1.5 py-0.5 font-mono text-xs font-medium",
-        low ? `${colorClasses.warning.bg} text-white` : `${colorClasses.success.bg} text-white`,
-      )}
-      title={low ? "Low confidence — check against the document" : "High confidence"}
-    >
-      {pct}%
     </span>
   );
 }
@@ -235,7 +234,12 @@ export function Pipeline({
   const effectiveStep = isTerminal ? STATUS_ORDER.length - 1 : currentStep;
 
   return (
-    <div className={cn(variant === "card" && "rounded-lg border border-border bg-card p-4")}>
+    <div
+      className={cn(
+        variant === "card" &&
+          "rounded-lg border border-border bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]",
+      )}
+    >
       <div>
         <p className="text-sm font-semibold tracking-tight">{currentPhaseLabel(status)}</p>
       </div>

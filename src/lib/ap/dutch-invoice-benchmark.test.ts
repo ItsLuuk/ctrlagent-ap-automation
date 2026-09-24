@@ -23,11 +23,7 @@
 import { describe, expect, it } from "bun:test";
 import { extractFieldsFromPages, selectVisionPageNumbers } from "./ocr";
 
-const page = (pageNumber: number, text: string, confidence = 0.95) => ({
-  pageNumber,
-  text,
-  confidence,
-});
+const page = (pageNumber: number, text: string) => ({ pageNumber, text });
 
 // ---------------------------------------------------------------------------
 // 1. Dutch Date Formats

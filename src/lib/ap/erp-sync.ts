@@ -37,8 +37,9 @@ export type ErpRefs = {
 
 const STORAGE_KEY = "ap-automation-sync-events-v1";
 
-/** In-memory fallback when localStorage is unavailable (tests, SSR). Events
- *  are lost between sessions in that case, which is acceptable for demos. */
+/** In-memory fallback when localStorage is unavailable (tests and non-app
+ *  runtimes). Events are lost between sessions in that case, which is acceptable
+ *  for demos. */
 let memoryEvents: SyncEvent[] = [];
 
 /** Idempotency key: (invoiceId, kind). One successful push per key, ever. */

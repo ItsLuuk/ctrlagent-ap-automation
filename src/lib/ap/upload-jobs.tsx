@@ -87,7 +87,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
   const runOne = useCallback(
     async (job: UploadJob): Promise<void> => {
       inFlightRef.current += 1;
-      let currentStage = job.state.stage;
+      let currentStage: string = job.state.stage;
       try {
         updateJob(job.id, {
           state: { ...job.state, stage: "ai reading", progress: 0.5, background: true },
@@ -135,7 +135,11 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
         // Audit the system-init decision — the audit trail must show how the
         // invoice arrived at vendor_profile (or why it skipped it).
         applyTransition(job.invoiceId, {
-          transition: "register-profile",
+          // Same two entry points the quick path uses; the vendor-master lookup
+          // above picks which one, so a known vendor is not dragged back into
+          // registration by the shared `register-profile` step.
+          transition:
+            initialStatus === "vendor_profile" ? "register-profile" : "route-known-vendor",
           actor: { name: "system", roles: ["system"] },
           note:
             initialStatus === "vendor_profile"
@@ -194,7 +198,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [updateInvoice, updateJob, removeJob],
+    [updateInvoice, updateJob, removeJob, applyTransition, vendors],
   );
 
   /** Schedules a job, respecting the concurrency cap. */

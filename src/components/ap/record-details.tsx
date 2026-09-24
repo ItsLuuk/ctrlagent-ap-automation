@@ -59,11 +59,6 @@ export function RecordDetails({
   const hasHandoffMarker = invoice.audit.some(
     (entry) => entry.action === "Marked ready for external handoff",
   );
-  const pages = invoice.ocrPages ?? [];
-  const avgConfidence = pages.length
-    ? pages.reduce((sum, page) => sum + page.confidence, 0) / pages.length
-    : undefined;
-
   return (
     <Section {...(className ? { className } : {})}>
       <SectionHeader
@@ -90,11 +85,6 @@ export function RecordDetails({
               <span className="font-mono">
                 {invoice.pageCount} page{invoice.pageCount === 1 ? "" : "s"}
                 {invoice.ocrMethod ? ` · ${READ_METHOD[invoice.ocrMethod]}` : ""}
-              </span>
-            ) : null}
-            {avgConfidence !== undefined ? (
-              <span className="font-mono">
-                {Math.round(avgConfidence * 100)}% average confidence
               </span>
             ) : null}
           </div>

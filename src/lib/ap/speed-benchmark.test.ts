@@ -18,11 +18,44 @@ import {
  */
 
 function makePages(texts: string[]): PageRead[] {
-  return texts.map((text, i) => ({
-    pageNumber: i + 1,
-    text,
-    confidence: 0.95,
-  }));
+  return texts.map((text, i) => ({ pageNumber: i + 1, text }));
+}
+
+type TimingSummary = {
+  fixture: string;
+  samples: number;
+  p50Ms: number;
+  p95Ms: number;
+};
+
+const WARMUP_RUNS = 3;
+const MEASURED_RUNS = 20;
+
+function percentile(sorted: number[], fraction: number): number {
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * fraction) - 1));
+  return sorted[index] ?? 0;
+}
+
+/** Measures the heuristic reader itself; this does not claim to time VLM/OCR. */
+function measureHeuristicExtraction(fixture: string, pages: PageRead[], fileName: string): TimingSummary {
+  for (let run = 0; run < WARMUP_RUNS; run += 1) {
+    extractFieldsFromPages(pages, fileName);
+  }
+
+  const timings: number[] = [];
+  for (let run = 0; run < MEASURED_RUNS; run += 1) {
+    const startedAt = globalThis.performance.now();
+    extractFieldsFromPages(pages, fileName);
+    timings.push(globalThis.performance.now() - startedAt);
+  }
+
+  timings.sort((a, b) => a - b);
+  return {
+    fixture,
+    samples: timings.length,
+    p50Ms: percentile(timings, 0.5),
+    p95Ms: percentile(timings, 0.95),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -78,8 +111,8 @@ describe("speed: heuristic-first short-circuit", () => {
       (f) => fields[f] !== undefined && fields[f] !== "" && fields[f] !== 0,
     );
     expect(allPresent).toBe(false);
-    // vendor falls back to filename ("unknown"), not from OCR text
-    expect(fields.vendor).toBe("unknown");
+    // vendor falls back to the complete filename when OCR text has no vendor
+    expect(fields.vendor).toBe("unknown.pdf");
     expect(fields.invoiceNumber).toBeUndefined();
   });
 
@@ -295,7 +328,49 @@ describe("speed: theoretical speedup measurement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Integration: heuristic completeness across Dutch invoice variants
+// 5. Observed heuristic timing measurements
+// ---------------------------------------------------------------------------
+describe("speed: observed heuristic extraction timings", () => {
+  it("records p50 and p95 timings for representative text-layer fixtures", () => {
+    const onePage = [
+      "TechStart B.V.",
+      "Factuur nr: F00123",
+      "Factuurdatum: 12-04-2026",
+      "Subtotaal € 1.000,00",
+      "Totaal te betalen € 1.210,00",
+    ].join("\n");
+    const threePage = [
+      onePage,
+      "Leveringscondities: 30 dagen na factuurdatum.",
+      "Bedankt voor uw samenwerking.",
+    ];
+    const missingTotal = [
+      "Acme Techniek B.V.",
+      "Factuurnummer: AC-2026-0042",
+      "Factuurdatum: 12-04-2026",
+    ].join("\n");
+
+    const results = [
+      measureHeuristicExtraction("one-page complete", makePages([onePage]), "techstart.pdf"),
+      measureHeuristicExtraction("three-page text layer", makePages(threePage), "techstart.pdf"),
+      measureHeuristicExtraction("one-page missing total", makePages([missingTotal]), "acme.pdf"),
+    ];
+
+    for (const result of results) {
+      console.info(
+        `[speed-benchmark] ${result.fixture}: p50=${result.p50Ms.toFixed(3)}ms ` +
+          `p95=${result.p95Ms.toFixed(3)}ms (${result.samples} samples)`,
+      );
+      expect(result.samples).toBe(MEASURED_RUNS);
+      expect(Number.isFinite(result.p50Ms)).toBe(true);
+      expect(Number.isFinite(result.p95Ms)).toBe(true);
+      expect(result.p95Ms).toBeGreaterThanOrEqual(result.p50Ms);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 6. Integration: heuristic completeness across Dutch invoice variants
 // ---------------------------------------------------------------------------
 describe("speed: heuristic completeness across Dutch variants", () => {
   const CRITICAL_FIELDS = ["vendor", "invoiceNumber", "issueDate", "total"] as const;

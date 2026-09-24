@@ -10,6 +10,17 @@
  *    the combination importers accept without locale guessing.
  *  - Only approved records leave: status `scheduled`, and never the sample
  *    records — demo amounts must never reach a real bookkeeping file.
+ *  - And only with somewhere to send the money. A row whose vendor has no IBAN
+ *    on the document *or* in the vendor profile is a promise, not an entry, so
+ *    it is held back and named by the caller instead of shipping as a blank
+ *    column the accountant discovers after the payment run.
+ *  - Payment identifiers resolve document-first, profile-second: a first-time
+ *    vendor's bank details are typed during registration and only ever land on
+ *    the vendor record, so reading the invoice alone dropped the IBAN the
+ *    operator had just validated.
+ *  - `registration_number` joins the header beside `iban` and `vat_number` as
+ *    the vendor's KvK. Header-name importers are unaffected; positional ones
+ *    need the extra column.
  *  - Text cells starting with `= + - @` or whitespace get a leading
  *    apostrophe: vendor strings come from documents, and a cell must never
  *    execute as a formula in a spreadsheet.
@@ -21,6 +32,7 @@
  */
 import type { PurchaseOrder } from "./po-store";
 import type { Invoice } from "./types";
+import type { VendorMaster } from "./vendor-master";
 
 const BOM = "\uFEFF";
 const CRLF = "\r\n";
@@ -32,6 +44,7 @@ export const CSV_COLUMNS = [
   "vendor",
   "vat_number",
   "iban",
+  "registration_number",
   "currency",
   "subtotal",
   "vat_amount",
@@ -55,6 +68,70 @@ export function approvedForHandoff(invoices: Invoice[]): Invoice[] {
   );
 }
 
+/** The three identifiers a bookkeeping row needs to be actionable. */
+export type PaymentIdentifiers = {
+  iban: string;
+  vatNumber: string;
+  registrationNumber: string;
+};
+
+/** The first value that actually carries text; blanks are treated as absent. */
+function firstText(...values: Array<string | undefined>): string {
+  return values.find((value) => value !== undefined && value.trim() !== "")?.trim() ?? "";
+}
+
+/**
+ * A row's payment identifiers: what this document said, then what the vendor
+ * profile says. The document wins — it is the evidence attached to this
+ * invoice — and the profile is the fallback for the first-time vendor whose
+ * bank details the extractor never found and the operator typed by hand.
+ *
+ * Missing stays missing: nothing is inferred from the vendor name, the country
+ * or a sibling field, so a row can still be short a column rather than wrong.
+ */
+export function paymentIdentifiers(
+  invoice: Pick<Invoice, "vendor" | "iban" | "vatNumber" | "businessRegistrationNumber">,
+  vendors: Record<string, VendorMaster> = {},
+): PaymentIdentifiers {
+  const profile = vendors[invoice.vendor ?? ""];
+  return {
+    iban: firstText(invoice.iban, profile?.iban),
+    vatNumber: firstText(invoice.vatNumber, profile?.vatNumber),
+    registrationNumber: firstText(
+      invoice.businessRegistrationNumber,
+      profile?.businessRegistrationNumber,
+    ),
+  };
+}
+
+/**
+ * The rows the file may contain: approved, captured, and payable. This is the
+ * gate the CSV and the inbox button share, so the count the operator sees is
+ * the count of rows in the file.
+ */
+export function exportableForHandoff(
+  invoices: Invoice[],
+  vendors: Record<string, VendorMaster> = {},
+): Invoice[] {
+  return approvedForHandoff(invoices).filter(
+    (invoice) => paymentIdentifiers(invoice, vendors).iban !== "",
+  );
+}
+
+/**
+ * Approved rows the file refused, so the UI can name them instead of letting a
+ * missing IBAN surface as a blank cell three days later. Non-approved and
+ * sample records are never in here: they were never headed for the file.
+ */
+export function invoicesMissingPaymentRoute(
+  invoices: Invoice[],
+  vendors: Record<string, VendorMaster> = {},
+): Invoice[] {
+  return approvedForHandoff(invoices).filter(
+    (invoice) => paymentIdentifiers(invoice, vendors).iban === "",
+  );
+}
+
 /** Text cell: RFC 4180 escaping plus the spreadsheet formula guard. */
 function text(value: string): string {
   const guarded = /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
@@ -64,24 +141,28 @@ function text(value: string): string {
 /** Money cell: two decimals, dot separator, locale-independent. */
 function amount(value: number | undefined): string {
   return typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "";
-}
-
-/** The CSV file for every exportable invoice. Header only when none qualify. */
-export function bookkeepingCsv(invoices: Invoice[], purchaseOrders: PurchaseOrder[] = []): string {
+} /** The CSV file for every exportable invoice. Header only when none qualify. */
+export function bookkeepingCsv(
+  invoices: Invoice[],
+  purchaseOrders: PurchaseOrder[] = [],
+  vendors: Record<string, VendorMaster> = {},
+): string {
   const poNumberById = new Map(purchaseOrders.map((po) => [po.id, po.number]));
-  const rows = approvedForHandoff(invoices)
+  const rows = exportableForHandoff(invoices, vendors)
     .sort(
       (a, b) =>
         a.issueDate.localeCompare(b.issueDate) || a.invoiceNumber.localeCompare(b.invoiceNumber),
     )
-    .map((invoice) =>
-      [
+    .map((invoice) => {
+      const ids = paymentIdentifiers(invoice, vendors);
+      return [
         text(invoice.invoiceNumber),
         text(invoice.issueDate),
         text(invoice.dueDate),
         text(invoice.vendor),
-        text(invoice.vatNumber ?? ""),
-        text(invoice.iban ?? ""),
+        text(ids.vatNumber),
+        text(ids.iban),
+        text(ids.registrationNumber),
         text(invoice.currency),
         amount(invoice.subtotal),
         amount(invoice.tax),
@@ -90,8 +171,8 @@ export function bookkeepingCsv(invoices: Invoice[], purchaseOrders: PurchaseOrde
         text(invoice.department),
         text(invoice.poId ? (poNumberById.get(invoice.poId) ?? "") : ""),
         text(invoice.memo ?? ""),
-      ].join(","),
-    );
+      ].join(",");
+    });
   return BOM + [CSV_COLUMNS.join(","), ...rows].join(CRLF) + CRLF;
 }
 

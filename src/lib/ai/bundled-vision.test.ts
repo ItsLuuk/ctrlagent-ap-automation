@@ -36,10 +36,10 @@ function makeDeps(script: Script = {}): VisionRuntimeDeps & { spawned: number } 
 }
 
 describe("startVisionRuntime", () => {
-  it("is a silent no-op in the browser", async () => {
+  it("is a silent no-op outside the Tauri shell", async () => {
     const deps = makeDeps();
     deps.isTauri = () => false;
-    expect(await startVisionRuntime(deps)).toBe("browser");
+    expect(await startVisionRuntime(deps)).toBe("webview");
     expect(deps.spawned).toBe(0);
   });
 

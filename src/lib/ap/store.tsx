@@ -45,10 +45,12 @@ import {
   type Actor,
   type TransitionOutcome,
 } from "./state-machine";
+import { operatorActor, SOLE_USER } from "./operator";
 import { computeAutoTags, retagAll } from "./auto-tags";
 import { readAllPos, putPos, deletePos, clearPos, samplePos, type PurchaseOrder } from "./po-store";
 import { loadFileUrl, clearAllFiles } from "./file-store";
 import type { VendorMaster } from "./vendor-master";
+import type { TemplateLookup } from "./template-lookup";
 
 const STORAGE_KEY = "ap-automation-invoices-v1";
 const HISTORY_STORAGE_KEY = "ap-automation-history-v1";
@@ -140,6 +142,8 @@ type Ctx = {
   /** Records taken out of the queue — still readable, still restorable. */
   removed: Invoice[];
   templates: Record<string, VendorTemplate>;
+  /** OCR's template lookup port, implemented by the local profile store. */
+  findTemplateMatch: TemplateLookup;
   upsertTemplate: (vendor: string, zones: ZoneMap) => void;
   /** Canonical Phase-1 write path: persists human-confirmed mappings. */
   saveVendorTemplate: (input: SaveTemplateInput) => void;
@@ -151,6 +155,8 @@ type Ctx = {
   upsertVendor: (vendor: VendorMaster) => void;
   /** The user's own business profile — used to filter self-matches during extraction. */
   businessProfile: BusinessProfile;
+  /** The one person running this install, and the only actor they sign as. */
+  operator: Actor;
   /** Update the business profile. */
   setBusinessProfile: (profile: BusinessProfile) => void;
   /** Nothing captured and nothing completed — the state the app opens in. */
@@ -211,9 +217,56 @@ export function ApProvider({ children }: { children: ReactNode }) {
       readStoredInvoices(STORAGE_KEY).filter((invoice) => invoice.status === "archived"),
     ),
   );
-  const [templates, setTemplates] = useState<Record<string, VendorTemplate>>({});
+  /**
+   * Learned vendor templates, read at first paint like every other persisted
+   * list.
+   *
+   * It used to hydrate from a mount effect declared just *before* the effect
+   * that persists it, so a learned template survived only because the two
+   * effects happened to run in that order — one reorder, and every template the
+   * operator taught the app was dropped on every boot. The new template store
+   * first, the legacy key as the fallback, both read before anything writes.
+   */
+  const [templates, setTemplates] = useState<Record<string, VendorTemplate>>(() => {
+    try {
+      const persisted = readAllTemplates();
+      if (Object.keys(persisted).length > 0) return persisted;
+    } catch {
+      /* template-store not loaded — fall back to legacy key */
+    }
+    try {
+      const raw = localStorage.getItem(TEMPLATES_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, VendorTemplate>;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      /* ignore corrupted storage */
+    }
+    return {};
+  });
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>(() => readAllPos());
-  const [vendorMaster, setVendorMaster] = useState<Record<string, VendorMaster>>({});
+  /**
+   * Vendor-master, read at first paint like the queue and Removed.
+   *
+   * It used to be hydrated from a mount effect declared *after* the persist
+   * effect below — so on every boot the persist effect wrote the initial empty
+   * object first and the read then found `{}`. Vendor-master therefore never
+   * survived a reload: every vendor came back unknown, which is what routing,
+   * the profile completeness meter and the identity comparison all read from.
+   */
+  const [vendorMaster, setVendorMaster] = useState<Record<string, VendorMaster>>(() => {
+    try {
+      const raw = localStorage.getItem(VENDORS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Record<string, VendorMaster>;
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+      }
+    } catch {
+      /* ignore corrupted storage */
+    }
+    return {};
+  });
   const [businessProfile, setBusinessProfileState] = useState<BusinessProfile>(() => {
     try {
       const raw = localStorage.getItem(BUSINESS_PROFILE_KEY);
@@ -226,6 +279,14 @@ export function ApProvider({ children }: { children: ReactNode }) {
     }
     return EMPTY_BUSINESS_PROFILE;
   });
+
+  /**
+   * Who this install acts as. Derived here, once, from the profile the operator
+   * filled in: every action button, every audit entry and every transition in
+   * the app reads this actor, so a record cannot be signed by a colleague the
+   * app invented.
+   */
+  const operator = useMemo(() => operatorActor(businessProfile), [businessProfile]);
 
   /** The store's lists as they stand right now, for callbacks that outlive the
    *  render that created them (the removal toast, for one). */
@@ -279,27 +340,6 @@ export function ApProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    try {
-      const persisted = readAllTemplates();
-      if (Object.keys(persisted).length > 0) {
-        setTemplates((prev) => ({ ...prev, ...persisted }));
-        return;
-      }
-    } catch {
-      /* template-store not loaded — fall back to legacy key */
-    }
-    try {
-      const raw = localStorage.getItem(TEMPLATES_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, VendorTemplate>;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) setTemplates(parsed);
-      }
-    } catch {
-      /* ignore corrupted storage */
-    }
   }, []);
 
   useEffect(() => {
@@ -409,7 +449,7 @@ export function ApProvider({ children }: { children: ReactNode }) {
                 {
                   id: uid(),
                   at: new Date().toISOString(),
-                  actor: actor ?? "Luuk Koppen",
+                  actor: actor ?? operator.name,
                   action: auditAction,
                   note,
                 },
@@ -434,27 +474,30 @@ export function ApProvider({ children }: { children: ReactNode }) {
     return { accepted: true };
   }, []);
 
-  const setStatus = useCallback<Ctx["setStatus"]>((id, status, actor, action, note) => {
-    // Same freeze as updateInvoice: a decided record's status moves only
-    // through the machine's transitions, never by a direct write that could
-    // silently unfreeze it or rewrite where a signature sits.
-    const target = lists.current.invoices.find((inv) => inv.id === id);
-    if (target && patchRefusal(target)) return;
-    setInvoices((prev) =>
-      prev.map((inv) =>
-        inv.id === id
-          ? {
-              ...inv,
-              status,
-              audit: [
-                ...inv.audit,
-                { id: uid(), at: new Date().toISOString(), actor, action, note },
-              ],
-            }
-          : inv,
-      ),
-    );
-  }, []);
+  const setStatus = useCallback<Ctx["setStatus"]>(
+    (id, status, actor, action, note) => {
+      // Same freeze as updateInvoice: a decided record's status moves only
+      // through the machine's transitions, never by a direct write that could
+      // silently unfreeze it or rewrite where a signature sits.
+      const target = lists.current.invoices.find((inv) => inv.id === id);
+      if (target && patchRefusal(target)) return;
+      setInvoices((prev) =>
+        prev.map((inv) =>
+          inv.id === id
+            ? {
+                ...inv,
+                status,
+                audit: [
+                  ...inv.audit,
+                  { id: uid(), at: new Date().toISOString(), actor, action, note },
+                ],
+              }
+            : inv,
+        ),
+      );
+    },
+    [operator.name],
+  );
 
   /** Links (or unlinks) a purchase order to an invoice — a draft-phase
    *  decision that drives approval matching. Audited. Frozen records take
@@ -477,7 +520,7 @@ export function ApProvider({ children }: { children: ReactNode }) {
               {
                 id: uid(),
                 at: new Date().toISOString(),
-                actor: actor ?? "Luuk Koppen",
+                actor: actor ?? operator.name,
                 action: po ? `Linked PO ${po.number}` : "Unlinked PO",
               },
             ],
@@ -485,13 +528,18 @@ export function ApProvider({ children }: { children: ReactNode }) {
         }),
       );
     },
-    [purchaseOrders],
+    [operator.name, purchaseOrders],
   );
 
   /**
    * Canonical Phase-Flow write path (plan §1). Runs the transition through
    * the state machine — legality, actor role, mandatory reason, SoD — and
    * applies the status change + audit entry only when it passes.
+   *
+   * `soleUser` is decided here rather than accepted from the caller: this is the
+   * one write path, so one place answering "how many people use this install"
+   * means no call site can forget it — and a caller cannot quietly re-enable a
+   * duty split this install has nobody to satisfy (see ./operator).
    */
   const applyTransition = useCallback<Ctx["applyTransition"]>((id, input) => {
     let outcome: import("./state-machine").TransitionOutcome = {
@@ -527,7 +575,7 @@ export function ApProvider({ children }: { children: ReactNode }) {
             outcome = { accepted: false, reason: blocking.message };
             return repaired;
           }
-          const result = transition(repaired, input);
+          const result = transition(repaired, { ...input, soleUser: SOLE_USER });
           if (!result.ok) {
             console.warn(`[state-machine] rejected ${input.transition} on ${id}:`, result.error);
             outcome = { accepted: false, reason: describeTransitionError(result.error) };
@@ -735,20 +783,6 @@ export function ApProvider({ children }: { children: ReactNode }) {
     }
   }, [vendorMaster]);
 
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(VENDORS_STORAGE_KEY);
-      if (raw) {
-        const parsed = JSON.parse(raw) as Record<string, VendorMaster>;
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-          setVendorMaster((prev) => ({ ...prev, ...parsed }));
-        }
-      }
-    } catch {
-      /* ignore corrupted storage */
-    }
-  }, []);
-
   /** Explicit opt-in to the demo set. Captures already in the queue stay. */
   const loadSampleData = useCallback(() => {
     const payload = sampleDataPayload();
@@ -797,12 +831,14 @@ export function ApProvider({ children }: { children: ReactNode }) {
       removeInvoice,
       restoreInvoice,
       templates,
+      findTemplateMatch,
       upsertTemplate,
       saveVendorTemplate,
       confirmTemplateExtraction,
       vendors: vendorMaster,
       upsertVendor,
       businessProfile,
+      operator,
       setBusinessProfile,
       isFirstRun: invoices.length === 0 && history.length === 0 && removed.length === 0,
       hasSampleData: hasSampleData(invoices, history),
@@ -824,12 +860,14 @@ export function ApProvider({ children }: { children: ReactNode }) {
       removeInvoice,
       restoreInvoice,
       templates,
+      findTemplateMatch,
       upsertTemplate,
       saveVendorTemplate,
       confirmTemplateExtraction,
       vendorMaster,
       upsertVendor,
       businessProfile,
+      operator,
       setBusinessProfile,
       loadSampleData,
       clearSampleData,

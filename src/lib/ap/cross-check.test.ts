@@ -1,13 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import {
-  AGREEMENT_BOOST,
-  DISAGREEMENT_CEILING,
-  adjustConfidenceForAgreement,
-  applyCrossCheck,
-  compareExtractions,
-  disagreements,
-} from "./cross-check";
-import { CONFIDENT_THRESHOLD } from "./mapping";
+import { compareExtractions, disagreements } from "./cross-check";
 import { confirmedReads, extractFieldsFromPages } from "./ocr";
 
 describe("compareExtractions", () => {
@@ -62,45 +54,6 @@ describe("compareExtractions", () => {
   });
 });
 
-describe("adjustConfidenceForAgreement", () => {
-  it("boosts an agreed field and caps at 0.99", () => {
-    expect(adjustConfidenceForAgreement(0.9, "agree")).toBeCloseTo(0.9 + AGREEMENT_BOOST, 2);
-    expect(adjustConfidenceForAgreement(0.99, "agree")).toBe(0.99);
-  });
-
-  it("pins a disagreed field below the review threshold", () => {
-    const adjusted = adjustConfidenceForAgreement(0.95, "disagree");
-    expect(adjusted).toBe(DISAGREEMENT_CEILING);
-    expect(adjusted).toBeLessThan(CONFIDENT_THRESHOLD);
-  });
-
-  it("never raises the confidence of a disagreed field", () => {
-    expect(adjustConfidenceForAgreement(0.4, "disagree")).toBe(0.4);
-  });
-
-  it("leaves unverified and missing outcomes untouched", () => {
-    expect(adjustConfidenceForAgreement(0.8, "unverified")).toBe(0.8);
-    expect(adjustConfidenceForAgreement(0.8, undefined)).toBe(0.8);
-  });
-});
-
-describe("applyCrossCheck", () => {
-  it("adjusts only the fields present in the confidence map", () => {
-    const result = applyCrossCheck(
-      { vendor: 0.9, total: 0.95 },
-      { vendor: "agree", total: "disagree", tax: "unverified" },
-    );
-    expect(result.vendor).toBeCloseTo(0.93, 2);
-    expect(result.total).toBe(DISAGREEMENT_CEILING);
-    expect(result.tax).toBeUndefined();
-  });
-
-  it("returns the original map when there is no cross-check", () => {
-    const confidence = { total: 0.95 };
-    expect(applyCrossCheck(confidence, undefined)).toBe(confidence);
-  });
-});
-
 describe("disagreements", () => {
   it("lists only the disputed fields", () => {
     const listed = disagreements({ vendor: "agree", total: "disagree", tax: "unverified" });
@@ -123,7 +76,6 @@ describe("confirmedReads", () => {
             "Factuurnummer: NW-20481",
             "Totaal te betalen 1.210,00",
           ].join("\n"),
-          confidence: 0.95,
         },
       ],
       "northwind-20481.pdf",
@@ -140,7 +92,7 @@ describe("confirmedReads", () => {
 
   it("excludes the file-name vendor fallback", () => {
     const fields = extractFieldsFromPages(
-      [{ pageNumber: 1, text: ["Factuur", "BTW NR 123", "€ 10,00"].join("\n"), confidence: 0.9 }],
+      [{ pageNumber: 1, text: ["Factuur", "BTW NR 123", "€ 10,00"].join("\n") }],
       "unreadable-scan.pdf",
     );
 

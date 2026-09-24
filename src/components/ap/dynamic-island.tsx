@@ -204,7 +204,7 @@ export function DynamicIsland({
       {expanded && (
         <div
           className={cn(
-            "absolute right-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-[22px] border border-white/10 bg-[#1c1c1e] text-white shadow-2xl",
+            "absolute right-0 top-full z-50 mt-2 w-[340px] overflow-hidden rounded-[22px] border border-white/10 bg-surface-inverse text-white shadow-2xl",
             "animate-in fade-in slide-in-from-top-2 duration-200",
           )}
           onMouseEnter={handleMouseEnter}

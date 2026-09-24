@@ -1,14 +1,14 @@
-# Foundry — local-first invoice processing
+# Foundry — local-first AP automation
 
-> For small finance teams who can't send supplier data to yet another cloud, Foundry reads
-> invoices entirely on your own machine — and learns every vendor's layout.
+> **Automate AP from PDF to bookkeeping-ready—without sending invoice data to the cloud.**
 
-Foundry is a desktop app for capturing supplier invoices, extracting the fields, and carrying
-each record from upload to payment preparation — with **no server, no account, and no cloud AI
-call**. IBANs, VAT numbers and supplier data never leave the machine.
+Foundry is a desktop app for turning incoming invoices into review-ready payable records and
+bookkeeping-ready CSVs. It extracts fields locally, shows where each value came from, keeps
+exceptions visible, and carries each record through human approval to handoff—with **no server,
+no account, and no cloud AI call**. IBANs, VAT numbers and invoice data never leave the machine.
 
-Capture invoices locally, confirm the data, approve the record, and prepare it for external
-handoff. The system handles the routine; you handle the judgment.
+Capture invoices locally, confirm the data, approve the record, and prepare it for bookkeeping
+handoff. The system handles the routine; you handle the judgment. Foundry never sends a payment.
 
 ## Why local-first
 
@@ -20,15 +20,16 @@ handoff. The system handles the routine; you handle the judgment.
 
 ## How it works
 
-**Upload → wait → review.** Everything else lives behind the review screen.
+**PDF → review-ready payable record → bookkeeping-ready CSV.** Everything else lives behind the review screen.
 
-1. **Capture** — drag-and-drop or the native file picker (desktop and browser).
+1. **Capture** — drag-and-drop or the native file picker in the desktop app.
 2. **Preparing** — the source file is saved locally first, then read through a learned vendor
    template when one exists, otherwise from the document itself. Failures keep their exact
    stage and a human-readable reason, with retry and manual-review paths.
 3. **Ready to review** — a new vendor pins a profile once (name, business registration and a
-   valid IBAN are required), then each invoice moves through draft → approval → payment queue,
-   where it is marked ready for external handoff.
+   valid IBAN are required), then each invoice moves through draft → approval → handoff. Once a
+   record is approved and prepared, export a CSV for your bookkeeping import. Foundry does not
+   send a payment.
 
 ### What Foundry deliberately does not do
 
@@ -48,7 +49,7 @@ handoff. The system handles the routine; you handle the judgment.
   (or `http://localhost:11434`). The configured origin is stored in localStorage under
   the key `ollama-base`. If you run Ollama on a non-default host or port, set it once in
   **Settings → Vision model → Ollama host** and Foundry remembers it. This is the #1 support
-  issue: a browser talking to `localhost` will not reach an Ollama instance that only listens
+  issue: the desktop app talking to `localhost` will not reach an Ollama instance that only listens
   on a custom address. Verify with `curl http://127.0.0.1:11434/api/version` from the same
   machine.
 
@@ -58,15 +59,16 @@ Requirements: Node.js, [Bun](https://bun.sh) for unit tests, and the Rust/Tauri 
 (MSVC C++ build tools on Windows) for the desktop window.
 
 ```sh
-npm install
-npm run dev        # browser
-npm run tauri:dev  # desktop window
+bun run bootstrap:tauri  # install dependencies, clean stale processes, rebuild, and launch
+bun run dev:tauri       # clean launch of the Tauri window (use this for app work)
+bun run dev:vite         # browser-only Vite server for Playwright/preview
+bun run tauri:dev:clean  # re-run the clean launch without installing dependencies
 ```
 
 ```sh
-bun test           # unit tests (OCR, extraction, state machine, errors)
-npm run test:e2e   # Playwright end-to-end, including the full upload regression
-npm run lint       # eslint
+bun test                 # unit tests (OCR, extraction, state machine, errors)
+bun run test:e2e         # Playwright end-to-end, including the full upload regression
+bun run lint             # eslint
 ```
 
 ## Documentation
@@ -74,6 +76,7 @@ npm run lint       # eslint
 - [`docs/POSITIONING.md`](docs/POSITIONING.md) — positioning canvas, category decision, and
   open validation tasks. **Source of truth for product decisions:** a new screen, feature, or
   line of copy serves the positioning statement or gets cut.
+- [`docs/RELEASE-NOTES.md`](docs/RELEASE-NOTES.md) — user-facing release messaging and scope.
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) · [`docs/TESTING.md`](docs/TESTING.md) ·
   [`docs/TECH-DEBT.md`](docs/TECH-DEBT.md) · [`docs/RELIABILITY.md`](docs/RELIABILITY.md)
 - [`Branding/`](Branding) — design principles, type scale, and the voice rules every

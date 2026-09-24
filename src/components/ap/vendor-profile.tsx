@@ -28,7 +28,6 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { ConfidenceChip } from "./status";
 import { ZoneCheckChip } from "./zone-check-chip";
 import { cn } from "@/lib/utils";
 import type { ZoneCheckResult } from "@/lib/ap/types";
@@ -43,18 +42,31 @@ export function initialsOf(vendor: string): string {
   return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
 }
 
-/** Deterministic pastel tone for the logo circle, keyed by vendor name. */
+const DEPARTMENT_TONES: Record<string, string> = {
+  Engineering: "bg-primary/15 text-accent-foreground",
+  Finance: "bg-primary/20 text-accent-foreground",
+  Marketing: "bg-warning/15 text-warning-foreground",
+  Operations: "bg-success/15 text-success-foreground",
+  Sales: "bg-warning/20 text-warning-foreground",
+  People: "bg-secondary text-foreground",
+};
+
+/** Deterministic fallback tone for vendors without a department. */
 export function logoTone(vendor: string): string {
   const tones = [
-    "bg-accent/15 text-accent-foreground",
-    "bg-primary/15 text-primary",
+    "bg-primary/15 text-accent-foreground",
     "bg-success/15 text-success-foreground",
     "bg-warning/15 text-warning-foreground",
-    "bg-destructive/15 text-destructive",
+    "bg-secondary text-foreground",
   ];
   let hash = 0;
   for (const ch of vendor) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
   return tones[Math.abs(hash) % tones.length]!;
+}
+
+/** Keep the vendor circle tied to the department that owns the relationship. */
+export function departmentLogoTone(department: string | undefined, vendor?: string): string {
+  return (department && DEPARTMENT_TONES[department]) || logoTone(vendor ?? "unknown");
 }
 
 /** Billing email: the master record's email, or a derived fallback. */
@@ -66,14 +78,19 @@ export function vendorEmail(vendor: string, record?: VendorMaster): string {
 /** Circular vendor logo from the master record, or initials fallback. */
 export function VendorLogo({
   vendor,
+  department,
   className = "size-11 text-sm",
 }: {
   vendor: string;
+  /** Explicit department while a profile is being edited. */
+  department?: string | undefined;
   /** Tailwind size + text classes, e.g. "size-8 text-xs". */
   className?: string;
 }) {
   const { vendors } = useAp();
-  const logoUrl = vendors[vendor]?.logoUrl;
+  const record = vendors[vendor];
+  const logoUrl = record?.logoUrl;
+  const resolvedDepartment = department ?? record?.department;
   if (logoUrl) {
     return (
       <img
@@ -89,6 +106,7 @@ export function VendorLogo({
       aria-hidden
       className={cn(
         "flex shrink-0 items-center justify-center rounded-full font-semibold",
+        departmentLogoTone(resolvedDepartment, vendor),
         className,
       )}
     >
@@ -99,14 +117,12 @@ export function VendorLogo({
 
 export function VendorProfile({
   vendor,
-  confidence,
   sourcePage,
   showPage,
   zoneCheck,
   onChange,
 }: {
   vendor: string;
-  confidence?: number | undefined;
   sourcePage?: number | undefined;
   showPage?: boolean | undefined;
   zoneCheck?: ZoneCheckResult | undefined;
@@ -133,7 +149,6 @@ export function VendorProfile({
               <span className="font-mono text-xs text-muted-foreground">p.{sourcePage}</span>
             ) : null}
             <ZoneCheckChip result={zoneCheck} />
-            <ConfidenceChip value={confidence} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="icon" variant="ghost" className="size-6" aria-label="Vendor actions">
@@ -241,7 +256,7 @@ function EditVendorDialog({
             ) : (
               <div
                 aria-hidden
-                className={`flex size-12 items-center justify-center rounded-full text-sm font-semibold ${logoTone(name)}`}
+                className={`flex size-12 items-center justify-center rounded-full text-sm font-semibold ${departmentLogoTone(record?.department, name)}`}
               >
                 {initialsOf(name)}
               </div>

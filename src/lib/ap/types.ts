@@ -110,6 +110,9 @@ export type ExtractedField =
 
 export type ZoneField = ExtractedField;
 
+/** How a field value was obtained, without a synthetic numeric score. */
+export type Provenance = "exact" | "read" | "derived" | "manual";
+
 /** Normalized 0..1 rectangle anchored to a document image. */
 export type Zone = { x: number; y: number; w: number; h: number };
 
@@ -198,8 +201,7 @@ export type ZoneCheckResult = { field: ZoneField; ai: string; ocr: string; match
 /**
  * Cross-source agreement for one field: two independent readers (the vision /
  * template path and the regex text scan) either agree, disagree, or one of them
- * had nothing to say. A disagreement keeps the value but pins its confidence
- * below the review threshold.
+ * had nothing to say. Disagreements are surfaced in the audit and approval UI.
  */
 export type CrossCheckOutcome = "agree" | "disagree" | "unverified";
 export type CrossCheck = Partial<Record<ExtractedField, CrossCheckOutcome>>;
@@ -262,7 +264,7 @@ export type OcrWord = {
  */
 export type TemplateEngineResult = {
   fields: Partial<Record<ZoneField, string | number>>;
-  confidence: Partial<Record<ZoneField, number>>;
+  provenance: Partial<Record<ZoneField, Provenance>>;
   fieldSources: Partial<Record<ZoneField, number>>;
   /** How this invoice was read. */
   path: "template" | "vlm" | "ocr-fallback";
@@ -333,7 +335,6 @@ export type OcrMethod = "text-layer" | "none";
 export type OcrPage = {
   pageNumber: number;
   charCount: number;
-  confidence: number;
   method: OcrPageMethod;
 };
 
@@ -364,14 +365,15 @@ export type Invoice = {
   department: string;
   memo: string;
   tags: string[];
-  confidence: Partial<Record<ExtractedField, number>>;
+  /** Per-field extraction trace. Older records may not carry this metadata. */
+  provenance?: Partial<Record<ExtractedField, Provenance>> | undefined;
   audit: AuditEntry[];
   /** The invoice text states the amount was already paid (e.g. "reeds betaald"). */
   prepaid?: boolean | undefined;
   /** Snippet from the document showing the prepaid phrasing, for the approval UI. */
   prepaidPhrase?: string | undefined;
   source: "sample" | "upload";
-  engine?: "gemma" | "template" | undefined;
+  engine?: "gemma" | "template" | "ocr" | undefined;
   /** Template fingerprint the engine matched, when engine === "template". */
   templateFingerprint?: string | undefined;
   /** Per-field trace: which engine produced each value. */
@@ -382,6 +384,8 @@ export type Invoice = {
   fileName?: string | undefined;
   fileType?: string | undefined;
   fileUrl?: string | undefined;
+  /** SHA-256 of the original uploaded bytes, used for ingest duplicate detection. */
+  fileHash?: string | undefined;
   ocrText?: string | undefined;
   pageCount?: number | undefined;
   ocrMethod?: OcrMethod | undefined;
@@ -421,9 +425,9 @@ export type InvoiceTag = (typeof PREDEFINED_TAGS)[number];
 export const TAG_TONES: Record<InvoiceTag, { border: string; accent: string }> = {
   Urgent: { border: "border-destructive", accent: "text-destructive" },
   Late: { border: "border-destructive", accent: "text-destructive" },
-  "First-time vendor": { border: "border-foundry-orange", accent: "text-foundry-orange" },
-  "High value": { border: "border-foundry-orange", accent: "text-foundry-orange" },
-  "Needs receipt": { border: "border-foundry-orange", accent: "text-foundry-orange" },
+  "First-time vendor": { border: "border-warning", accent: "text-warning-foreground" },
+  "High value": { border: "border-warning", accent: "text-warning-foreground" },
+  "Needs receipt": { border: "border-warning", accent: "text-warning-foreground" },
   "Duplicate risk": { border: "border-destructive", accent: "text-destructive" },
   International: { border: "border-steel", accent: "text-muted-foreground" },
   Recurring: { border: "border-border", accent: "text-muted-foreground" },
@@ -507,6 +511,12 @@ export type BusinessProfile = {
   kvkNumber?: string;
   /** Generic country-neutral business registration number. */
   businessRegistrationNumber?: string;
+  /**
+   * The person running this install, who signs every approval and release.
+   * Optional so profiles written before it keep loading; the operator module
+   * falls back to an unnamed operator rather than to a name the app invents.
+   */
+  operatorName?: string | undefined;
 };
 
 export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
@@ -517,4 +527,5 @@ export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
   vatNumber: "",
   kvkNumber: "",
   businessRegistrationNumber: "",
+  operatorName: "",
 };

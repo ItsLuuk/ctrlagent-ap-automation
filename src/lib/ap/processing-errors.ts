@@ -4,6 +4,7 @@ import type { ProcessingState } from "./types";
 export function processingStageLabel(stage: string | undefined): string {
   const value = stage?.toLowerCase() ?? "";
   if (value.includes("upload")) return "Opening the uploaded file";
+  if (value.includes("layout") || value.includes("ocr")) return "Reading the page layout";
   if (value.includes("preprocess")) return "Preparing the document";
   if (value.includes("matching") || value.includes("template")) {
     return "Matching the vendor template";
@@ -26,7 +27,7 @@ export function processingFailureReason(error: unknown, stage?: string): string 
   const normalized = message.toLowerCase();
   const where = processingStageLabel(stage).toLowerCase();
 
-  if (normalized.includes("node:") || normalized.includes("externalized for browser")) {
+  if (normalized.includes("node:") || normalized.includes("externalized for")) {
     return `The document reader tried to load a desktop-only module while ${where}. Restart Foundry and try again.`;
   }
   if (normalized.includes("worker") || normalized.includes("pdfjs") || normalized.includes("pdf")) {
@@ -46,7 +47,7 @@ export function processingFailureReason(error: unknown, stage?: string): string 
     normalized.includes("storage") ||
     normalized.includes("quota")
   ) {
-    return "Foundry could not save the original file locally. Check available disk space and browser storage permissions, then try again.";
+    return "Foundry could not save the original file locally. Check available disk space and local storage permissions, then try again.";
   }
   if (normalized.includes("empty") || normalized.includes("no pages")) {
     return "The document contains no readable pages. Upload a non-empty PDF or image.";

@@ -51,6 +51,13 @@ import type { ProfileField, VendorMaster } from "@/lib/ap/vendor-master";
 import { ReviewHeader } from "./review-header";
 import { VendorProfileCard } from "./vendor-profile-card";
 import { LineItemsList } from "./line-items-list";
+import { Section, SectionHeader } from "./primitives";
+
+/** The receipt's primary metadata fields, in reading order. */
+const RECEIPT_DETAIL_FIELDS = ["issueDate", "dueDate", "invoiceNumber"] as const;
+const RECEIPT_TOTAL_FIELDS = ["subtotal", "tax", "total"] as const;
+type ReceiptDetailField = (typeof RECEIPT_DETAIL_FIELDS)[number];
+type ReceiptTotalField = (typeof RECEIPT_TOTAL_FIELDS)[number];
 
 /** Stagger between successive extraction beats, ms. */
 const BEAT_MS = 90;
@@ -81,7 +88,7 @@ function extractionBeats(
 }
 
 export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: ReactNode }) {
-  const { updateInvoice, vendors } = useAp();
+  const { updateInvoice, upsertVendor, vendors } = useAp();
   const [showVendorImprovement, setShowVendorImprovement] = useState(
     Boolean(invoice.templateDrift),
   );
@@ -225,6 +232,13 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
     mapping.editDraftValue(field, value);
   };
 
+  const handleSaveVendorProfile = () => {
+    upsertVendor({ ...profileDraft, updatedAt: new Date().toISOString() });
+    toast.success("Vendor profile saved", {
+      description: `${profileDraft.name || "This vendor"} will use these details for future invoices.`,
+    });
+  };
+
   const focusQueueField = (field: QueueField) => {
     if (field === "currency") {
       (document.querySelector('[aria-label="Currency"]') as HTMLElement | null)?.focus();
@@ -253,6 +267,7 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
   const handleQueueAccept = (field: QueueField) => {
     if (field !== "currency" && field !== "department") {
       mapping.focusField(field);
+      mapping.markFieldVerified(field);
     } else {
       focusQueueField(field);
     }
@@ -284,48 +299,51 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
         )}
 
         <div className="grid gap-5 lg:grid-cols-[1.1fr_minmax(0,1fr)]">
-          <DocumentPane
-            invoice={invoice}
-            assignments={assignments}
-            activeField={activeField}
-            assignMode={assignMode}
-            pendingClickPoint={pendingClickPoint}
-            pendingSelection={pendingSelection}
-            canShowDocument={canShowDocument}
-            imgSrc={imgSrc}
-            renderFailed={renderFailed}
-            setScrollContainer={mapping.setScrollContainer}
-            setDocumentImage={mapping.setDocumentImage}
-            onToggleAssignMode={mapping.toggleAssignMode}
-            onDocumentPointerDown={mapping.handleDocumentPointerDown}
-            onDocumentPointerMove={mapping.handleDocumentPointerMove}
-            onDocumentPointerUp={mapping.handleDocumentPointerUp}
-            onAssignPendingClick={mapping.assignPendingClickTo}
-            onDismissPendingClick={mapping.dismissPendingClick}
-            onFocusField={mapping.focusField}
-            vendorImprovementOpen={showVendorImprovement || Boolean(invoice.templateDrift)}
-            mappedCount={mappedCount}
-            canUndo={mapping.undoStack.length > 0}
-            onUndo={mapping.undoLastAssignment}
-            revealBeats={revealBeats}
-          />
+          <div className="order-2 self-start lg:order-1 lg:sticky lg:top-2">
+            <DocumentPane
+              invoice={invoice}
+              assignments={assignments}
+              activeField={activeField}
+              assignMode={assignMode}
+              pendingClickPoint={pendingClickPoint}
+              pendingSelection={pendingSelection}
+              canShowDocument={canShowDocument}
+              imgSrc={imgSrc}
+              renderFailed={renderFailed}
+              setScrollContainer={mapping.setScrollContainer}
+              setDocumentImage={mapping.setDocumentImage}
+              onToggleAssignMode={mapping.toggleAssignMode}
+              onDocumentPointerDown={mapping.handleDocumentPointerDown}
+              onDocumentPointerMove={mapping.handleDocumentPointerMove}
+              onDocumentPointerUp={mapping.handleDocumentPointerUp}
+              onAssignPendingClick={mapping.assignPendingClickTo}
+              onDismissPendingClick={mapping.dismissPendingClick}
+              onFocusField={mapping.focusField}
+              vendorImprovementOpen={showVendorImprovement || Boolean(invoice.templateDrift)}
+              mappedCount={mappedCount}
+              canUndo={mapping.undoStack.length > 0}
+              onUndo={mapping.undoLastAssignment}
+              revealBeats={revealBeats}
+            />
+          </div>
 
-          <div className="space-y-4">
+          <div className="order-1 space-y-4 lg:order-2">
             <VendorProfileCard
               vendor={profileDraft}
               onChange={(field, value) => {
                 setProfileDraft((p) => ({ ...p, [field]: value }));
                 if (field === "name") handleFieldEdit("vendor", value);
               }}
+              onSave={handleSaveVendorProfile}
               focusField={profileFocus}
               onFocusDone={() => setProfileFocus(null)}
             />
-            <FieldsPane
+            <ReceiptPanel
               invoice={invoice}
               fields={fields}
               assignments={assignments}
               triageStatuses={triageStatuses}
-              triageOrder={triageOrder.filter((f) => f !== "vendor")}
+              triageOrder={triageOrder.filter((field) => field !== "vendor")}
               activeField={activeField}
               crossCheck={crossCheck}
               currency={invoice.currency}
@@ -351,14 +369,12 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
               showVendorImprovement={showVendorImprovement || Boolean(invoice.templateDrift)}
               revealBeats={revealBeats}
             />
-            <LineItemsField invoice={invoice} />
             <ConfirmActions
               vendorName={fields.vendor || invoice.vendor}
               allFieldsVerified={allFieldsVerified}
               validationIssues={validationIssues}
               blockingIssues={blockingIssues}
               onOpenConfirm={focusFirstBlockingIssue}
-              queueEmpty={queueItems.length === 0}
               onConfirm={() => mapping.confirmChoice({ profile: profileDraft })}
             />
           </div>
@@ -516,7 +532,7 @@ function DocumentPane({
   return (
     <section
       data-draft-document
-      className="self-start overflow-hidden rounded-lg border border-border bg-card lg:sticky lg:top-2"
+      className="overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]"
     >
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <p className="text-xs font-medium  text-muted-foreground">Document</p>
@@ -643,7 +659,7 @@ function DocumentPane({
     </section>
   );
 }
-function FieldsPane({
+function ReceiptPanel({
   invoice,
   fields,
   assignments,
@@ -676,123 +692,177 @@ function FieldsPane({
   showVendorImprovement: boolean;
   revealBeats: Partial<Record<ZoneField, number>>;
 }) {
+  const additionalFields = triageOrder.filter(
+    (field) =>
+      !RECEIPT_DETAIL_FIELDS.includes(field as ReceiptDetailField) &&
+      !RECEIPT_TOTAL_FIELDS.includes(field as ReceiptTotalField),
+  );
+  const [moreFieldsOpen, setMoreFieldsOpen] = useState(false);
+  const additionalFieldKey = additionalFields.join(",");
+  useEffect(() => {
+    if (activeField && additionalFieldKey.split(",").includes(activeField)) {
+      setMoreFieldsOpen(true);
+    }
+  }, [activeField, additionalFieldKey]);
+
+  const fieldRow = (field: ZoneField) => (
+    <FieldRow
+      key={field}
+      invoice={invoice}
+      field={field}
+      value={fields[field]}
+      assignment={assignments[field]}
+      status={triageStatuses[field]}
+      isActive={activeField === field}
+      onFocus={() => onFocusField(field)}
+      onEdit={(value) => onEditValue(field, value)}
+      showVendorImprovement={showVendorImprovement}
+      revealBeat={revealBeats[field]}
+    />
+  );
+
   return (
-    <section className="rounded-lg border border-border bg-card">
-      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
-        <p className="text-xs font-medium  text-muted-foreground">Draft fields</p>
-      </div>
-
-      <div className="grid gap-3 border-b border-border px-4 py-3 sm:grid-cols-2">
-        <CurrencySelect value={currency} onChange={onCurrencyChange} />
-        <DepartmentSelect value={department} onChange={onDepartmentChange} />
-      </div>
-
-      <div className="divide-y divide-border">
-        {(() => {
-          const dateFields = triageOrder.filter(
-            (f): f is "issueDate" | "dueDate" => f === "issueDate" || f === "dueDate",
-          );
-          const otherFields = triageOrder.filter((f) => f !== "issueDate" && f !== "dueDate");
-          // Subtotal + Tax side by side so the eye reads the equation;
-          // Total follows full-width directly below.
-          const moneyPair = (["subtotal", "tax"] as const).filter((f) => otherFields.includes(f));
-          const rest = otherFields.filter((f) => f !== "subtotal" && f !== "tax");
-          const row = (field: ZoneField) => (
-            <FieldRow
-              key={field}
-              invoice={invoice}
-              field={field}
-              value={fields[field]}
-              assignment={assignments[field]}
-              status={triageStatuses[field]}
-              isActive={activeField === field}
-              onFocus={() => onFocusField(field)}
-              onEdit={(value) => onEditValue(field, value)}
-              showVendorImprovement={showVendorImprovement}
-              revealBeat={revealBeats[field]}
-            />
-          );
-          return (
-            <>
-              {dateFields.length > 0 && (
-                <div className="grid gap-3 px-4 py-3 sm:grid-cols-2">
-                  {dateFields.map((field) => (
-                    <FieldRow
-                      key={field}
-                      invoice={invoice}
-                      field={field}
-                      value={fields[field]}
-                      assignment={assignments[field]}
-                      status={triageStatuses[field]}
-                      isActive={activeField === field}
-                      onFocus={() => onFocusField(field)}
-                      onEdit={(value) => onEditValue(field, value)}
-                      showVendorImprovement={showVendorImprovement}
-                      revealBeat={revealBeats[field]}
-                    />
-                  ))}
-                </div>
-              )}
-              {moneyPair.length > 0 && (
-                <div className="grid gap-3 px-4 py-3 sm:grid-cols-2">
-                  {moneyPair.map((field) => row(field))}
-                </div>
-              )}
-              {rest.map((field) => row(field))}
-            </>
-          );
-        })()}
-      </div>
-
-      <div className="border-t border-border px-4 py-2.5">
-        {/* Lines are checked at approval — Draft shows a quiet status only. */}
-        <p
-          className={`text-xs ${crossCheck.ok ? "text-muted-foreground" : "font-medium text-warning-foreground"}`}
-          role="status"
-        >
-          {crossCheck.ok
-            ? `Lines ${money(crossCheck.sum, invoice.currency)} reconcile ✓`
-            : `${crossCheck.detail} Flagged for approval.`}
+    <Section>
+      <SectionHeader
+        title="Invoice"
+        {...(invoice.invoiceNumber ? { hint: invoice.invoiceNumber } : {})}
+      />
+      <div className="flex items-center justify-between border-b border-border bg-muted/30 px-4 py-2.5">
+        <div className="flex items-center gap-1.5">
+          <Table2 className="size-3.5 text-muted-foreground" />
+          <p className="text-xs font-medium text-muted-foreground">Line items</p>
+        </div>
+        <p className="font-mono text-xs text-muted-foreground">
+          {countOf(invoice.lineItems.length, "item")}
         </p>
       </div>
 
-      {/* Line items summary — visible in the field pane so the processor can see
-          what the cross-check is summing, even though line items are edited in the
-          document pane's LineItemsList, not through drag-to-zone field mapping. */}
-      {invoice.lineItems.length > 0 && (
-        <div className="border-t border-border px-4 py-2.5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-xs font-medium text-muted-foreground">Line items</p>
-            <p className="text-xs font-mono text-muted-foreground">
-              {invoice.lineItems.length} item{invoice.lineItems.length !== 1 ? "s" : ""}
-            </p>
-          </div>
-          <div className="mt-1.5 space-y-1 rounded-md border border-border bg-muted/30 px-3 py-2">
-            {invoice.lineItems.map((li) => (
-              <div key={li.id} className="flex items-center justify-between gap-2 text-xs">
-                <span className="truncate">{li.description}</span>
-                <span className="font-mono text-muted-foreground shrink-0">
-                  {li.quantity} × {money(li.unitPrice, invoice.currency)} ={" "}
-                  {money(li.amount, invoice.currency)}
-                </span>
-              </div>
-            ))}
-            <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-border/60">
-              <span className="text-xs font-medium text-muted-foreground">Lines total</span>
-              <span
-                className={`font-mono text-xs font-semibold ${crossCheck.ok ? "text-foreground" : "text-warning-foreground"}`}
-              >
-                {money(crossCheck.sum, invoice.currency)}
-              </span>
-            </div>
-          </div>
+      <LineItemsField invoice={invoice} embedded />
+
+      <ReceiptTotals
+        invoice={invoice}
+        fields={fields}
+        assignments={assignments}
+        triageStatuses={triageStatuses}
+        activeField={activeField}
+        onFocusField={onFocusField}
+        onEditValue={onEditValue}
+        showVendorImprovement={showVendorImprovement}
+        revealBeats={revealBeats}
+        crossCheck={crossCheck}
+      />
+
+      <div className="border-t border-border">
+        <div className="flex items-center justify-between border-b border-border/60 px-4 py-2.5">
+          <p className="text-xs font-medium text-muted-foreground">Invoice details</p>
+          <p className="text-xs text-muted-foreground">Check the highlighted fields</p>
         </div>
-      )}
-    </section>
+        <div className="grid gap-3 px-4 py-3 sm:grid-cols-2">
+          {RECEIPT_DETAIL_FIELDS.map((field) => fieldRow(field))}
+          <CurrencySelect value={currency} onChange={onCurrencyChange} />
+          <DepartmentSelect value={department} onChange={onDepartmentChange} />
+        </div>
+
+        {additionalFields.length > 0 && (
+          <details
+            open={moreFieldsOpen}
+            onToggle={(event) => setMoreFieldsOpen(event.currentTarget.open)}
+            className="border-t border-border/60"
+          >
+            <summary className="cursor-pointer px-4 py-2.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-secondary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset">
+              More document fields ({countOf(additionalFields.length, "field")})
+            </summary>
+            <div className="divide-y divide-border/60 border-t border-border/60">
+              {additionalFields.map((field) => fieldRow(field))}
+            </div>
+          </details>
+        )}
+      </div>
+    </Section>
   );
 }
 
-function LineItemsField({ invoice }: { invoice: Invoice }) {
+function ReceiptTotals({
+  invoice,
+  fields,
+  assignments,
+  triageStatuses,
+  activeField,
+  onFocusField,
+  onEditValue,
+  showVendorImprovement,
+  revealBeats,
+  crossCheck,
+}: {
+  invoice: Invoice;
+  fields: DraftFields;
+  assignments: AssignmentsByField;
+  triageStatuses: Record<ZoneField, "amber" | "green">;
+  activeField: ExtractedField | null;
+  onFocusField: (field: ExtractedField) => void;
+  onEditValue: (field: ExtractedField, value: string) => void;
+  showVendorImprovement: boolean;
+  revealBeats: Partial<Record<ZoneField, number>>;
+  crossCheck: { ok: boolean; sum: number; detail: string };
+}) {
+  const totalField = (field: ReceiptTotalField, label: string, prominent = false) => (
+    <div
+      data-draft-field={field}
+      className={`grid w-full grid-cols-[minmax(0,1fr)_minmax(8rem,50%)] items-center gap-3 rounded-sm ${activeField === field ? "bg-accent/5" : ""} ${prominent ? "border-t border-border pt-2" : ""}`}
+    >
+      <div className="flex min-w-0 flex-1 items-center gap-1.5">
+        {triageStatuses[field] === "amber" ? (
+          <span className="size-2 shrink-0 rounded-full bg-warning" title="Needs attention" />
+        ) : (
+          <Check className="size-3.5 shrink-0 text-success-foreground" />
+        )}
+        <button
+          type="button"
+          className={`truncate text-left ${prominent ? "text-sm font-semibold" : "text-xs font-medium text-muted-foreground"}`}
+          onClick={() => onFocusField(field)}
+        >
+          {label}
+        </button>
+        {showVendorImprovement && assignments[field]?.anchor ? (
+          <AnchorChip anchor={assignments[field]!.anchor!} />
+        ) : null}
+        <ZoneCheckChip
+          result={resultFor(invoice.zoneCheck, field)}
+          verified={invoice.provenance?.[field] === "manual"}
+        />
+      </div>
+      <Input
+        aria-label={label}
+        className={`h-9 w-full min-w-0 text-right font-mono text-sm tabular-nums ${prominent ? "font-semibold" : ""}`}
+        value={fields[field]}
+        placeholder="0.00"
+        onFocus={() => onFocusField(field)}
+        onChange={(event) => onEditValue(field, event.target.value)}
+      />
+    </div>
+  );
+
+  return (
+    <div className="border-t border-border bg-muted/20 px-4 py-3">
+      {" "}
+      <div className="w-full space-y-1">
+        {totalField("subtotal", "Subtotal")}
+        {totalField("tax", "Tax / BTW")}
+        <div className="pt-1">{totalField("total", "Total", true)}</div>
+      </div>
+      <p
+        className={`mt-2 text-right text-xs ${crossCheck.ok ? "text-muted-foreground" : "font-medium text-warning-foreground"}`}
+        role="status"
+      >
+        {crossCheck.ok
+          ? `Lines ${money(crossCheck.sum, invoice.currency)} reconcile ✓`
+          : `${crossCheck.detail} Flagged for approval.`}
+      </p>
+    </div>
+  );
+}
+
+function LineItemsField({ invoice, embedded = false }: { invoice: Invoice; embedded?: boolean }) {
   const { updateInvoice } = useAp();
 
   /** Line-item edits land per keystroke, so the commit (and its audit entry)
@@ -842,10 +912,25 @@ function LineItemsField({ invoice }: { invoice: Invoice }) {
     [invoice.id],
   );
 
+  const lineItems = (
+    <LineItemsList
+      items={invoice.lineItems}
+      currency={invoice.currency}
+      editable
+      onChange={onLineItemsChange}
+      subtotal={invoice.subtotal}
+      tax={invoice.tax}
+      invoiceTotal={invoice.total}
+      showTotals={!embedded}
+    />
+  );
+
+  if (embedded) return <div className="border-b border-border">{lineItems}</div>;
+
   return (
     <section
       aria-labelledby="draft-line-items-title"
-      className="overflow-hidden rounded-lg border border-border bg-card"
+      className="overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]"
     >
       <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
         <div className="flex items-center gap-1.5">
@@ -858,15 +943,7 @@ function LineItemsField({ invoice }: { invoice: Invoice }) {
           {countOf(invoice.lineItems.length, "item")}
         </p>
       </div>
-      <LineItemsList
-        items={invoice.lineItems}
-        currency={invoice.currency}
-        editable
-        onChange={onLineItemsChange}
-        subtotal={invoice.subtotal}
-        tax={invoice.tax}
-        invoiceTotal={invoice.total}
-      />
+      {lineItems}
     </section>
   );
 }
@@ -968,7 +1045,10 @@ function FieldRow({
           {showVendorImprovement && assignment?.anchor ? (
             <AnchorChip anchor={assignment.anchor} />
           ) : null}
-          <ZoneCheckChip result={resultFor(invoice.zoneCheck, field)} />
+          <ZoneCheckChip
+            result={resultFor(invoice.zoneCheck, field)}
+            verified={invoice.provenance?.[field] === "manual"}
+          />
         </div>
       </div>
 
@@ -995,7 +1075,13 @@ function FieldRow({
 function displayDate(value: string): string {
   if (!value) return "";
   const date = new Date(`${value}T00:00:00`);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+  // Same day-first format as every other date on this screen (`shortDate`, the
+  // page header, the Due column). The bare `toLocaleDateString()` rendered the
+  // picker in the machine's locale, so one screen showed "01-10-2026" in the
+  // header and "1-10-2026" in the field it labels.
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleDateString("nl-NL", { day: "2-digit", month: "2-digit", year: "numeric" });
 }
 
 /** Calendar picker for draft date fields — one click opens, one click sets. */
@@ -1052,7 +1138,6 @@ function ConfirmActions({
   validationIssues,
   blockingIssues,
   onOpenConfirm,
-  queueEmpty,
   onConfirm,
 }: {
   vendorName: string;
@@ -1060,12 +1145,18 @@ function ConfirmActions({
   validationIssues: Array<{ code: string; message: string; severity: "error" | "warning" }>;
   blockingIssues: Array<{ code: string; message: string; severity: "error" | "warning" }>;
   onOpenConfirm: () => void;
-  queueEmpty: boolean;
   onConfirm: () => void;
 }) {
   const needsAttention = validationIssues.length > 0 || !allFieldsVerified;
+  /**
+   * Whether there is still something a person can look at. Exactly the test the
+   * verdict line above uses: a queue that only carries optional vendor-profile
+   * gaps (address, BTW) must not turn the primary action into a review that has
+   * nowhere to go — that label promised a step and performed the submit.
+   */
+  const readyToConfirm = blockingIssues.length === 0 && allFieldsVerified;
   return (
-    <section className="rounded-lg border border-border bg-card p-4">
+    <section className="rounded-lg border border-border bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-sm font-medium">
@@ -1095,14 +1186,15 @@ function ConfirmActions({
       )}
       <div className="mt-4 flex flex-wrap items-center gap-2">
         <Button
-          onClick={queueEmpty ? onConfirm : onOpenConfirm}
+          onClick={readyToConfirm ? onConfirm : onOpenConfirm}
           title={
-            queueEmpty
+            readyToConfirm
               ? "All fields verified — continue to approval"
               : "Jump to the first issue that needs attention"
           }
         >
-          <BadgeCheck className="size-4" /> {queueEmpty ? "Confirm invoice" : "Review next issue"}
+          <BadgeCheck className="size-4" />{" "}
+          {readyToConfirm ? "Confirm invoice" : "Review next issue"}
         </Button>
       </div>
     </section>

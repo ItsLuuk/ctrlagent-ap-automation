@@ -16,12 +16,10 @@ import { useNavigate } from "@tanstack/react-router";
 import { Ban } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { duplicatePeer } from "@/lib/ap/auto-tags";
-import { availableTransitions, type Actor } from "@/lib/ap/state-machine";
+import { availableTransitions } from "@/lib/ap/state-machine";
+import { SOLE_USER } from "@/lib/ap/operator";
 import { useAp } from "@/lib/ap/store";
 import { shortDate, type Invoice } from "@/lib/ap/types";
-
-/** Demo processor persona — the only role the `archive` rule admits. */
-const ACTOR: Actor = { name: "Luuk Koppen", roles: ["processor"] };
 
 /** How to name the twin a duplicate was caught against. */
 function nameOf(peer: Invoice): string {
@@ -31,9 +29,12 @@ function nameOf(peer: Invoice): string {
 }
 
 export function RemoveFromQueue({ invoice }: { invoice: Invoice }) {
-  const { invoices, removeInvoice, restoreInvoice } = useAp();
+  const { invoices, removeInvoice, restoreInvoice, operator } = useAp();
   const navigate = useNavigate();
-  if (!availableTransitions(invoice, ACTOR).includes("archive")) return null;
+  // The same install fact the store's write path uses, so the control and the
+  // rule cannot disagree about who may take the step.
+  if (!availableTransitions(invoice, operator, { soleUser: SOLE_USER }).includes("archive"))
+    return null;
 
   // The label follows the tag the app already put on the row, so the action sits
   // where the flag is instead of appearing on a record nothing warned about. The
@@ -43,7 +44,7 @@ export function RemoveFromQueue({ invoice }: { invoice: Invoice }) {
   const note = peer ? `Same vendor and amount as ${nameOf(peer)}.` : undefined;
 
   const remove = () => {
-    const result = removeInvoice(invoice.id, ACTOR, note);
+    const result = removeInvoice(invoice.id, operator, note);
     if (!result.accepted) {
       toast.error(result.reason ?? "Couldn't remove this record.", {
         description: "Nothing changed — the invoice is exactly as you left it.",
@@ -54,7 +55,7 @@ export function RemoveFromQueue({ invoice }: { invoice: Invoice }) {
       description: peer
         ? `Same vendor and amount as ${nameOf(peer)} — it keeps its audit trail under Removed.`
         : `${invoice.vendor} keeps its audit trail under Removed.`,
-      action: { label: "Undo", onClick: () => restoreInvoice(invoice.id, ACTOR) },
+      action: { label: "Undo", onClick: () => restoreInvoice(invoice.id, operator) },
     });
     navigate({ to: "/" });
   };

@@ -63,12 +63,17 @@ function SettingsPage() {
 
   const hasChanges = JSON.stringify(draft) !== JSON.stringify(businessProfile);
   const hasName = draft.name.trim().length > 0;
+  // The operator's name is worth saving on its own: someone who signs their own
+  // invoices may have no reason to hand the app their company details, and an
+  // approval that falls back to "You" because a required field was empty is the
+  // same invented-signature problem in a quieter form.
+  const hasOperatorName = (draft.operatorName ?? "").trim().length > 0;
 
   const handleSave = () => {
     setBusinessProfile(draft);
     setSaved(true);
     toast.success("Business profile saved", {
-      description: "Invoice extraction will now use this to filter out your own data.",
+      description: "Approvals are signed as you, and extraction filters out your own data.",
     });
     setTimeout(() => setSaved(false), 2000);
   };
@@ -81,6 +86,7 @@ function SettingsPage() {
       iban: "",
       vatNumber: "",
       businessRegistrationNumber: "",
+      operatorName: "",
     });
   };
 
@@ -126,6 +132,23 @@ function SettingsPage() {
           VAT number, IBAN, and email when scanning invoices. This means faster processing and fewer
           false matches on vendor fields.
         </InfoBanner>
+
+        <Section className="mt-6">
+          <SectionHeader title="You" hint="Who signs this install's approvals" />
+          <div className="space-y-5 p-5">
+            <FormField
+              label="Your name"
+              hint="Signed on every approval and handoff. Left blank, records are signed as “You” rather than a name the app makes up."
+            >
+              <Input
+                value={draft.operatorName ?? ""}
+                onChange={(e) => setDraft((p) => ({ ...p, operatorName: e.target.value }))}
+                placeholder="Sam de Vries"
+                className="h-10"
+              />
+            </FormField>
+          </div>
+        </Section>
 
         <Section className="mt-6">
           <SectionHeader title="Company details" hint="Required fields marked with *" />
@@ -200,7 +223,11 @@ function SettingsPage() {
         </Section>
 
         <div className="mt-6 flex items-center gap-3">
-          <Button onClick={handleSave} disabled={!hasChanges || !hasName} className="gap-2">
+          <Button
+            onClick={handleSave}
+            disabled={!hasChanges || (!hasName && !hasOperatorName)}
+            className="gap-2"
+          >
             {saved ? (
               <>
                 <Check className="size-4" /> Saved

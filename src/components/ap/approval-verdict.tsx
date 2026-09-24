@@ -6,7 +6,7 @@
  * actually stops the approval, a plain card otherwise, because "nothing blocks
  * approval" is not a warning and painting it amber put good news in the same
  * weight as a problem. The flagged rows live in the compare list below, each one
- * already marked with its own confidence, so the strip carries no counts and no
+ * already carrying its own verdict, so the strip carries no counts and no
  * second sentence restating them.
  */
 import { AlertTriangle, CheckCircle2, ListChecks } from "@/components/icons";

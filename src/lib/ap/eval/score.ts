@@ -1,5 +1,5 @@
 /**
- * Extraction eval — scoring. Pure, no browser APIs.
+ * Extraction eval — scoring. Pure, no runtime APIs.
  *
  * A fixture is a labeled invoice: the *expected* field values a human would
  * enter, plus the inputs the extraction pipeline needs. The runner produces

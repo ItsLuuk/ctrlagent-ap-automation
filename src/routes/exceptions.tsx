@@ -134,7 +134,7 @@ function ExceptionQueue() {
           The pipeline is clean. Failed syncs and held invoices will appear here with a next action.
         </EmptyState>
       ) : (
-        <div className="mt-5 overflow-hidden rounded-lg border border-border bg-card">
+        <div className="mt-5 overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
           <div className="divide-y divide-border">
             {items.map((item) => (
               <div

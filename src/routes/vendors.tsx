@@ -8,7 +8,7 @@ import { Users } from "@/components/icons";
 import { PageHeader } from "@/components/ap/page-header";
 import { Shell } from "@/components/ap/shell";
 import { EmptyState } from "@/components/ap/primitives";
-import { logoTone, vendorEmail, initialsOf } from "@/components/ap/vendor-profile";
+import { departmentLogoTone, vendorEmail, initialsOf } from "@/components/ap/vendor-profile";
 import { useAp } from "@/lib/ap/store";
 import { money } from "@/lib/ap/types";
 
@@ -51,9 +51,7 @@ function VendorsPage() {
   };
   invoices.forEach((i) => track(i.vendor, i.total, i.currency, false));
   history.forEach((h) => track(h.vendor, h.total, h.currency, true));
-  const vendors = [...byVendor.entries()].sort((a, b) =>
-    a[0].localeCompare(b[0]),
-  );
+  const vendors = [...byVendor.entries()].sort((a, b) => a[0].localeCompare(b[0]));
 
   return (
     <Shell>
@@ -72,40 +70,42 @@ function VendorsPage() {
           {vendors.map(([vendor, stats]) => {
             const record = vendorMaster[vendor];
             return (
-            <Link
-              key={vendor}
-              to="/"
-              search={{}}
-              className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 transition-colors hover:bg-accent/5"
-            >
-              {record?.logoUrl ? (
-                <img
-                  src={record.logoUrl}
-                  alt=""
-                  aria-hidden
-                  className="size-11 shrink-0 rounded-full object-cover"
-                />
-              ) : (
-                <div
-                  aria-hidden
-                  className={`flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${logoTone(vendor)}`}
-                >
-                  {initialsOf(vendor)}
+              <Link
+                key={vendor}
+                to="/"
+                search={{}}
+                className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)] transition-[transform,box-shadow,background-color] hover:-translate-y-0.5 hover:bg-accent/5 hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)]"
+              >
+                {record?.logoUrl ? (
+                  <img
+                    src={record.logoUrl}
+                    alt=""
+                    aria-hidden
+                    className="size-11 shrink-0 rounded-full object-cover"
+                  />
+                ) : (
+                  <div
+                    aria-hidden
+                    className={`flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${departmentLogoTone(record?.department, vendor)}`}
+                  >
+                    {initialsOf(vendor)}
+                  </div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium">{vendor}</p>
+                  <p className="truncate text-xs text-muted-foreground">
+                    {vendorEmail(vendor, record)}
+                  </p>
                 </div>
-              )}
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium">{vendor}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {vendorEmail(vendor, record)}
-                </p>
-              </div>
-              <div className="shrink-0 text-right">
-                <p className="text-sm font-mono">{money(stats.openTotal + stats.paidTotal, stats.currency)}</p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {stats.open} open · {stats.paid} paid
-                </p>
-              </div>
-            </Link>
+                <div className="shrink-0 text-right">
+                  <p className="text-sm font-mono">
+                    {money(stats.openTotal + stats.paidTotal, stats.currency)}
+                  </p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {stats.open} open · {stats.paid} paid
+                  </p>
+                </div>
+              </Link>
             );
           })}
         </div>

@@ -21,7 +21,8 @@ import { uid, type AuditEntry, type Invoice, type InvoiceStatus } from "./types"
 export type ActorRole = "processor" | "approver" | "treasury" | "system";
 
 export type Actor = {
-  /** Display name, e.g. "Luuk Koppen". */
+  /** Who is acting. The one operator on an install signs with their own name
+   *  (see ./operator); the machine signs as "system". */
   name: string;
   roles: ActorRole[];
 };
@@ -31,6 +32,7 @@ export const SYSTEM_ACTOR: Actor = { name: "system", roles: ["system"] };
 /** Typed transition ids — the only way the status may change. */
 export type TransitionId =
   | "register-profile" // system-only: invoice detected as a first-time vendor on upload -> vendor_profile
+  | "route-known-vendor" // system-only: vendor already in vendor-master on upload -> draft
   | "vendor-profile-confirmed" // vendor_profile -> draft (processor; writes vendor-master)
   | "vendor-profile-rejected" // vendor_profile -> rejected (processor, reason required)
   | "confirm" // draft -> for_approval (processor or auto-verify system)
@@ -47,6 +49,7 @@ export type TransitionId =
 
 export const TRANSITION_LABEL: Record<TransitionId, string> = {
   "register-profile": "Vendor profile registered",
+  "route-known-vendor": "Vendor matched vendor-master",
   "vendor-profile-confirmed": "Vendor profile saved",
   "vendor-profile-rejected": "Vendor profile rejected",
   confirm: "Confirmed draft",
@@ -93,6 +96,21 @@ export const TRANSITIONS: Record<TransitionId, TransitionSpec> = {
   "register-profile": {
     from: [],
     to: "vendor_profile",
+    roles: ["system"],
+    requiresReason: false,
+  },
+  /**
+   * The other capture-time entry point: the extractor recognised a vendor that
+   * is already in vendor-master, so the invoice goes straight to Draft. Both
+   * capture outcomes are system decisions made before a person sees the
+   * record, which is why they are two entry points and not one rule with a
+   * conditional destination — a single `register-profile` call for both dragged
+   * every known vendor's invoice back into registration while its own audit
+   * note claimed it had entered Draft.
+   */
+  "route-known-vendor": {
+    from: [],
+    to: "draft",
     roles: ["system"],
     requiresReason: false,
   },
@@ -237,8 +255,13 @@ export type TransitionInput = {
   transition: TransitionId;
   actor: Actor;
   note?: string | undefined;
-  /** Org has exactly one member: skip name-based SoD (role gates still apply). */
-  soleUser?: boolean;
+  /**
+   * Org has exactly one member: skip name-based SoD (role gates still apply).
+   * `| undefined` is what lets callers forward an optional value
+   * (`soleUser: opts?.soleUser`) — with exactOptionalPropertyTypes a bare
+   * `?: boolean` rejects an explicitly-undefined argument.
+   */
+  soleUser?: boolean | undefined;
 };
 
 export type TransitionResult = {
@@ -334,6 +357,23 @@ const DECISION_ACTIONS = [
 
 export function lastDecision(invoice: Pick<Invoice, "audit">): AuditEntry | undefined {
   return [...invoice.audit].reverse().find((entry) => DECISION_ACTIONS.includes(entry.action));
+}
+
+/**
+ * Whether a handoff marker stands for the decision in force.
+ *
+ * Only markers written *after* that decision count. A record re-opened and
+ * approved again has none, even though an older entry in its history still says
+ * one was recorded — and quoting that entry is worse than cosmetic: the screen
+ * then reports a handoff that never happened and offers no way to mark the real
+ * one, so the last step of the flow becomes unreachable.
+ */
+export function handoffMarkerInForce(invoice: Pick<Invoice, "audit">): boolean {
+  const decision = lastDecision(invoice);
+  const after = decision ? invoice.audit.lastIndexOf(decision) + 1 : 0;
+  return invoice.audit
+    .slice(after)
+    .some((entry) => entry.action === TRANSITION_LABEL.release);
 }
 
 /**

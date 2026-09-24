@@ -44,14 +44,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Engineering",
         },
       ],
-      confidence: {
-        vendor: 0.98,
-        invoiceNumber: 0.96,
-        issueDate: 0.93,
-        dueDate: 0.72,
-        subtotal: 0.97,
-        tax: 0.68,
-        total: 0.99,
+      provenance: {
+        vendor: "read",
+        invoiceNumber: "read",
+        issueDate: "read",
+        dueDate: "read",
+        subtotal: "read",
+        tax: "read",
+        total: "read",
       },
       audit: [
         {
@@ -105,14 +105,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Marketing",
         },
       ],
-      confidence: {
-        vendor: 0.94,
-        invoiceNumber: 0.88,
-        issueDate: 0.91,
-        dueDate: 0.55,
-        subtotal: 0.95,
-        tax: 0.59,
-        total: 0.96,
+      provenance: {
+        vendor: "read",
+        invoiceNumber: "read",
+        issueDate: "read",
+        dueDate: "read",
+        subtotal: "read",
+        tax: "read",
+        total: "read",
       },
       audit: [
         {
@@ -151,14 +151,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Finance",
         },
       ],
-      confidence: {
-        vendor: 0.99,
-        invoiceNumber: 0.97,
-        issueDate: 0.95,
-        dueDate: 0.9,
-        subtotal: 0.98,
-        tax: 0.99,
-        total: 0.99,
+      provenance: {
+        vendor: "read",
+        invoiceNumber: "read",
+        issueDate: "read",
+        dueDate: "read",
+        subtotal: "read",
+        tax: "read",
+        total: "read",
       },
       audit: [
         {
@@ -219,14 +219,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Operations",
         },
       ],
-      confidence: {
-        vendor: 0.96,
-        invoiceNumber: 0.92,
-        issueDate: 0.9,
-        dueDate: 0.87,
-        subtotal: 0.94,
-        tax: 0.82,
-        total: 0.97,
+      provenance: {
+        vendor: "read",
+        invoiceNumber: "read",
+        issueDate: "read",
+        dueDate: "read",
+        subtotal: "read",
+        tax: "read",
+        total: "read",
       },
       audit: [
         {
@@ -292,14 +292,14 @@ export function sampleHistory(): Invoice[] {
           department: "Operations",
         },
       ],
-      confidence: {
-        vendor: 0.97,
-        invoiceNumber: 0.95,
-        issueDate: 0.94,
-        dueDate: 0.93,
-        subtotal: 0.96,
-        tax: 0.9,
-        total: 0.98,
+      provenance: {
+        vendor: "read",
+        invoiceNumber: "read",
+        issueDate: "read",
+        dueDate: "read",
+        subtotal: "read",
+        tax: "read",
+        total: "read",
       },
       audit: [
         {

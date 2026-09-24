@@ -76,6 +76,53 @@ describe("mergeGemmaPages line items", () => {
   });
 });
 
+describe("mergeGemmaPages VAT arbitration", () => {
+  it("preserves competing page VAT candidates and selects the supplier page", () => {
+    const merged = mergeGemmaPages([
+      parseGemmaPage(JSON.stringify({ vatNumber: "NL987654321B01" })),
+      parseGemmaPage(
+        JSON.stringify({
+          vatNumber: "NL123456789B01",
+          vendorEmail: "billing@acme.example",
+          iban: "NL91ABNA0417164300",
+        }),
+      ),
+    ]);
+
+    expect(merged.vatCandidates.map((candidate) => candidate.value)).toEqual([
+      "NL987654321B01",
+      "NL123456789B01",
+    ]);
+    expect(merged.vatNumber).toEqual({ value: "NL123456789B01", page: 2 });
+  });
+
+  it("keeps the page-local supplier candidate when the customer is on an earlier page", () => {
+    const merged = mergeGemmaPages([
+      parseGemmaPage(JSON.stringify({ vatNumber: "BE0123456789" })),
+      parseGemmaPage(
+        JSON.stringify({
+          vatNumber: "BE0987654321",
+          vendorEmail: "accounts@supplier.be",
+        }),
+      ),
+    ]);
+
+    expect(merged.vatNumber?.value).toBe("BE0987654321");
+    expect(merged.vatNumber?.page).toBe(2);
+    expect(merged.vatCandidates).toHaveLength(2);
+  });
+
+  it("preserves the original first value when there is no supplier page anchor", () => {
+    const merged = mergeGemmaPages([
+      parseGemmaPage(JSON.stringify({ vatNumber: "DE123456789" })),
+      parseGemmaPage(JSON.stringify({ vatNumber: "FRAB123456789" })),
+    ]);
+
+    expect(merged.vatCandidates).toHaveLength(2);
+    expect(merged.vatNumber?.value).toBe("DE123456789");
+  });
+});
+
 describe("gemmaToFields", () => {
   it("surfaces the corrected European amounts", () => {
     const fields = gemmaToFields(
@@ -128,8 +175,7 @@ describe("gemmaToFields", () => {
 
     // Issue date 2025-01-20 + 14 dagen = 2025-02-03.
     expect(fields.dueDate).toBe("2025-02-03");
-    // Computed due dates get the not-found floor: conf(false, _) caps at 0.5.
-    expect(fields.confidence.dueDate).toBe(0.5);
+    expect(fields.provenance.dueDate).toBe("derived");
   });
 
   it("keeps a VLM-read due date and does not overwrite it with the terms fallback", () => {
@@ -152,8 +198,7 @@ describe("gemmaToFields", () => {
 
     // Explicit VLM read wins over the 14-dagen fallback.
     expect(fields.dueDate).toBe("2025-02-14");
-    // conf(true, 0.95) = 0.92 * 0.95 = 0.874 → 0.87.
-    expect(fields.confidence.dueDate).toBe(0.87);
+    expect(fields.provenance.dueDate).toBe("read");
   });
 
   it("keeps an empty due date when there are no payment terms and no issue date", () => {
@@ -165,6 +210,6 @@ describe("gemmaToFields", () => {
     );
 
     expect(fields.dueDate).toBeUndefined();
-    expect(fields.confidence.dueDate).toBeLessThan(0.55);
+    expect(fields.provenance.dueDate).toBe("derived");
     });
 });

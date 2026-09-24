@@ -84,6 +84,15 @@ describe("finalizeInvoice VAT propagation", () => {
     expect(invoice.originalExtraction?.vatNumber).toBe(VAT);
   });
 
+  for (const path of ["text", "vlm", "template"] as const) {
+    it(`propagates cached text VAT when the ${path} path omits it`, async () => {
+      const invoice = await finalize(path, undefined, `BTW nr: ${VAT}`);
+
+      expect(invoice.vatNumber).toBe(VAT);
+      expect(invoice.originalExtraction?.vatNumber).toBe(VAT);
+    });
+  }
+
   it("does not invent a VAT number when the chosen result is missing", async () => {
     const invoice = await finalize("vlm", undefined);
 

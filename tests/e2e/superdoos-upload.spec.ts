@@ -2,6 +2,7 @@ import { test, expect } from "playwright/test";
 import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
+import { clearBrowserStorage, openApp } from "./harness";
 
 const superdoosPdf =
   process.env.SUPERDOOS_PDF ?? resolve(homedir(), "Downloads", "Superdoos.nl invoice.pdf");
@@ -47,30 +48,9 @@ test("Superdoos PDF survives upload, processing, persistence, and review navigat
     } as typeof Worker;
   });
 
-  await page.goto("./tauri.html#/", { waitUntil: "domcontentloaded" });
-  await page.evaluate(async () => {
-    localStorage.clear();
-    await new Promise<void>((resolve) => {
-      const request = indexedDB.deleteDatabase("ap-file-store");
-      request.onsuccess = request.onerror = request.onblocked = () => resolve();
-    });
-  });
-  await page.reload({ waitUntil: "domcontentloaded" });
-  // The dev server may be mid-HMR or re-optimizing dependencies on the first
-  // cold request of a session; in that window the SPA stays blank until one
-  // reload. Wait for a real render, recovering once if the first paint is
-  // swallowed by that race.
-  const rendered = () =>
-    page
-      .waitForFunction(() => (document.querySelector("#root")?.childElementCount ?? 0) > 0, {
-        timeout: 10_000,
-      })
-      .then(() => true)
-      .catch(() => false);
-  if (!(await rendered())) {
-    await page.reload({ waitUntil: "domcontentloaded" });
-  }
-  await expect(rendered()).resolves.toBe(true);
+  await openApp(page);
+  await clearBrowserStorage(page);
+  await openApp(page);
 
   // Filter to the visible trigger: first-run and inbox layouts render two
   // triggers (mobile + desktop) and only one is shown at a given viewport.

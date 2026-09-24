@@ -1,5 +1,5 @@
 /**
- * In-browser template store. Persists VendorTemplate per-vendor in
+ * Local app template store. Persists VendorTemplate per-vendor in
  * localStorage so the next invoice from that vendor skips the VLM pass.
  *
  * The store is keyed by `vendor_key` (the human vendor name, for display)

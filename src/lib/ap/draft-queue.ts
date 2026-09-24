@@ -106,7 +106,7 @@ export function buildQueue(args: {
       kind: "amber",
       field,
       label,
-      message: "Read with low confidence — check against the document.",
+      message: "Check this value against the document.",
     });
   }
 

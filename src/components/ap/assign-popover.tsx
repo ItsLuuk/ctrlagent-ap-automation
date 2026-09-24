@@ -96,7 +96,7 @@ export function CrossCheckLine({
   return (
     <div
       className="rounded-xl border border-border p-3 transition-[border-left-width,border-left-color] duration-200 ease-out-expo"
-      style={isConsistent ? undefined : { borderLeft: "3px solid #f56900" }}
+      style={isConsistent ? undefined : { borderLeft: "3px solid var(--warning)" }}
       role="status"
     >
       <div className="flex items-center justify-between gap-2">
@@ -104,7 +104,7 @@ export function CrossCheckLine({
           {isConsistent ? (
             <CircleCheck className="size-3.5 text-foreground" />
           ) : (
-            <CircleAlert className="size-3.5 text-foundry-orange" />
+            <CircleAlert className="size-3.5 text-warning-foreground" />
           )}
           Totals reconciliation
         </p>
@@ -119,7 +119,7 @@ export function CrossCheckLine({
             <dd className="flex items-center gap-1.5 font-mono text-xs font-medium">
               {formatter.format(r.value)}
               <span
-                className={r.match ? "text-foreground" : "text-foundry-orange"}
+                className={r.match ? "text-foreground" : "text-warning-foreground"}
                 aria-label={r.match ? "matches" : "mismatch"}
               >
                 {r.match ? <CircleCheck className="size-3" /> : <CircleAlert className="size-3" />}

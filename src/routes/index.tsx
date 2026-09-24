@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { createFileRoute, Link } from "@tanstack/react-router";
+import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
   ArrowUpRight,
@@ -32,7 +32,13 @@ import {
 import { TRANSITION_LABEL, type Actor } from "@/lib/ap/state-machine";
 import { moneyLine, totalsByCurrency } from "@/lib/ap/analytics";
 import { isLate } from "@/lib/ap/auto-tags";
-import { approvedForHandoff, bookkeepingCsv, downloadCsv } from "@/lib/ap/csv-export";
+import {
+  approvedForHandoff,
+  bookkeepingCsv,
+  downloadCsv,
+  exportableForHandoff,
+  invoicesMissingPaymentRoute,
+} from "@/lib/ap/csv-export";
 import { countOf } from "@/lib/ap/vocabulary";
 import { UploadDialog } from "@/components/ap/upload-dialog";
 import { FirstRun } from "@/components/ap/first-run";
@@ -62,9 +68,6 @@ type Filter = Bucket | "history" | "removed";
 /** Money as one line per currency: the band never adds euros to dollars, and
  *  never labels a euro total with a dollar sign. */
 const sumOf = (invoices: Invoice[]) => moneyLine(totalsByCurrency(invoices));
-
-/** Demo processor persona — the role that may put a removed record back. */
-const PROCESSOR: Actor = { name: "Luuk Koppen", roles: ["processor"] };
 
 /** When a record left the queue: the entry the removal itself wrote. */
 function removalEntry(invoice: Invoice) {
@@ -103,6 +106,8 @@ function Inbox() {
     history,
     removed,
     purchaseOrders,
+    vendors,
+    operator,
     restoreInvoice,
     isFirstRun,
     hasSampleData,
@@ -110,6 +115,7 @@ function Inbox() {
   } = useAp();
   const [filter, setFilter] = useState<Filter>("needsYou");
   const [query, setQuery] = useState("");
+  const navigate = useNavigate();
 
   const counts = useMemo(() => {
     const map = {
@@ -207,16 +213,49 @@ function Inbox() {
     [invoices, history],
   );
 
-  /** The set the export hands over — the same predicate the CSV writes. */
-  const exportable = useMemo(() => approvedForHandoff(invoices), [invoices]);
+  /** Approved and captured — the set the handoff is measured by. */
+  const approved = useMemo(() => approvedForHandoff(invoices), [invoices]);
+  /** The same set, minus anything with no IBAN to pay: exactly the file's rows. */
+  const exportable = useMemo(() => exportableForHandoff(invoices, vendors), [invoices, vendors]);
+  /** Approved rows held back for want of a payment route. Never dropped quietly. */
+  const missingRoute = useMemo(
+    () => invoicesMissingPaymentRoute(invoices, vendors),
+    [invoices, vendors],
+  );
 
-  /** One file out, nothing sent: the handoff is the file itself. */
+  /** One file out, nothing sent: the handoff is the file itself. An approved
+   *  invoice with no IBAN on the document or the vendor profile stays out of it
+   *  — the toast names the vendor and opens the one field that fixes it, because
+   *  a row that quietly misses the file is an invoice nobody pays. */
   const exportHandoff = () => {
-    if (exportable.length === 0) return;
+    if (approved.length === 0) return;
+    const blocked = missingRoute.map((invoice) => `${invoice.vendor} (${invoice.invoiceNumber})`);
+    const many = blocked.length !== 1;
+    const openVendors = { label: "Open vendors", onClick: () => navigate({ to: "/vendors" }) };
+    if (exportable.length === 0) {
+      toast.error(
+        `Nothing exported — ${countOf(blocked.length, "invoice")} ${many ? "have" : "has"} no payment route`,
+        {
+          description: `${blocked.join(", ")} — add the vendor's IBAN, then export again. No file was written; Foundry sent nothing.`,
+          action: openVendors,
+        },
+      );
+      return;
+    }
     downloadCsv(
       `foundry-approved-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
-      bookkeepingCsv(invoices, purchaseOrders),
+      bookkeepingCsv(invoices, purchaseOrders, vendors),
     );
+    if (blocked.length > 0) {
+      toast.error(
+        `Exported ${countOf(exportable.length, "invoice")} — ${countOf(blocked.length, "invoice")} left out`,
+        {
+          description: `${blocked.join(", ")} ${many ? "have" : "has"} no IBAN on the invoice or the vendor profile, so ${many ? "they" : "it"} did not reach the file.`,
+          action: openVendors,
+        },
+      );
+      return;
+    }
     toast.success(`Exported ${countOf(exportable.length, "invoice")} for handoff`, {
       description: "A CSV for your bookkeeping import — Foundry sent nothing.",
     });
@@ -225,7 +264,7 @@ function Inbox() {
   /** Puts a removed record back where it was — the same move the toast offers,
    *  so a removal can be walked back long after the toast has faded. */
   const restore = (id: string, vendor: string) => {
-    const result = restoreInvoice(id, PROCESSOR);
+    const result = restoreInvoice(id, operator);
     if (!result.accepted) {
       toast.error(result.reason ?? "Couldn't put that record back.", {
         description: "Nothing changed — Removed still holds it.",
@@ -271,7 +310,7 @@ function Inbox() {
           )}
 
           <div
-            className={`mt-6 grid gap-3 sm:grid-cols-2 ${
+            className={`mt-6 grid grid-cols-2 gap-3 sm:gap-4 ${
               totals.overdue.length > 0 ? "lg:grid-cols-5" : "lg:grid-cols-4"
             }`}
           >
@@ -298,9 +337,15 @@ function Inbox() {
             <Stat
               label="Approved"
               value={sumOf(totals.approved)}
-              hint="ready for external handoff"
+              // "Ready for handoff" is a claim; when a row cannot leave yet, the
+              // tile has to stop making it.
+              hint={
+                missingRoute.length > 0
+                  ? `${countOf(missingRoute.length, "invoice")} missing a payment route`
+                  : "ready for external handoff"
+              }
               action={
-                exportable.length > 0 ? (
+                approved.length > 0 ? (
                   <Button variant="outline" size="sm" className="w-full" onClick={exportHandoff}>
                     <Download className="size-3.5" />
                     Export CSV
@@ -308,7 +353,12 @@ function Inbox() {
                 ) : undefined
               }
             />
-            <Stat label="Completed" value={sumOf(totals.completed)} hint="in history" />
+            <Stat
+              label="Completed"
+              value={sumOf(totals.completed)}
+              hint="in history"
+              className={totals.overdue.length > 0 ? "col-span-2 lg:col-span-1" : undefined}
+            />
           </div>
 
           <Section className="mt-8">
@@ -318,7 +368,7 @@ function Inbox() {
                     rows the tab strip is hidden (one tab offers no choice), so
                     "Work queue" was the only label a reader had — over records
                     that are not in the queue at all. */}
-                <p className="text-nav-title font-semibold">
+                <p className="text-xl font-semibold tracking-tight">
                   {active === "removed"
                     ? "Removed"
                     : active === "history"
@@ -340,20 +390,22 @@ function Inbox() {
                 </p>
               </div>
               {filters.length > 1 ? (
-                <div className="flex flex-wrap items-center gap-1">
+                <div className="flex w-full max-w-full snap-x items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-lg bg-secondary/75 p-1 sm:w-auto sm:overflow-visible">
                   {filters.map((f) => (
                     <button
                       key={f}
                       onClick={() => setFilter(f)}
-                      className={`rounded-md px-4 py-2 text-xs font-medium transition-colors ${
+                      className={`shrink-0 snap-start whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-[background-color,color,box-shadow,transform] duration-200 ease-out-expo active:scale-[0.98] ${
                         active === f
-                          ? "bg-accent text-accent-foreground"
-                          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
+                          ? "bg-card text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
+                          : "text-muted-foreground hover:bg-card/55 hover:text-foreground"
                       }`}
                     >
                       {filterLabel(f)}
                       {counts[f] > 0 ? (
-                        <span className="ml-1.5 font-mono opacity-60">{counts[f]}</span>
+                        <span className="ml-1.5 rounded-full bg-background/70 px-1.5 py-0.5 font-mono text-[10px] opacity-65">
+                          {counts[f]}
+                        </span>
                       ) : null}
                     </button>
                   ))}
@@ -365,7 +417,7 @@ function Inbox() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Search vendor, number, team"
-                  className="h-9 pl-8 text-sm"
+                  className="h-9 rounded-full bg-muted pl-8 text-sm hover:bg-accent-soft"
                 />
               </div>
             </div>

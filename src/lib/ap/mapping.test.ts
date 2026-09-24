@@ -54,7 +54,7 @@ const baseInvoice: Invoice = {
   department: "Engineering",
   memo: "",
   tags: [],
-  confidence: { vendor: 0.95, invoiceNumber: 0.5 },
+  provenance: { vendor: "read", invoiceNumber: "derived" },
   audit: [],
   source: "sample",
   createdAt: "2026-09-19T00:00:00Z",
@@ -162,17 +162,25 @@ describe("suggestZone", () => {
 describe("fieldStatus triage", () => {
   const statuses: Record<ZoneField, FieldStatus> = {} as never;
 
-  it("flags low confidence as amber", () => {
+  it("flags derived values as amber", () => {
     expect(triageStatus(baseInvoice, "invoiceNumber")).toBe("amber");
   });
 
-  it("flags a failed sanity check as amber even at high confidence", () => {
-    const invoice = { ...baseInvoice, confidence: { vendor: 0.95 } };
+  it("flags a failed sanity check as amber for a directly read value", () => {
+    const invoice = { ...baseInvoice, provenance: { vendor: "read" as const } };
     expect(fieldStatus(invoice, "vendor", { zoneCheckMatch: false })).toBe("amber");
   });
 
+  it("clears the amber state after a reviewer corrects the field", () => {
+    const invoice = {
+      ...baseInvoice,
+      provenance: { invoiceNumber: "manual" as const },
+    };
+    expect(fieldStatus(invoice, "invoiceNumber", { zoneCheckMatch: false })).toBe("green");
+  });
+
   it("flags empty values as amber", () => {
-    const empty = { ...baseInvoice, confidence: {}, invoiceNumber: "" };
+    const empty = { ...baseInvoice, invoiceNumber: "" };
     expect(fieldStatus(empty, "invoiceNumber")).toBe("amber");
   });
 

@@ -10,7 +10,7 @@
  * `OLLAMA_MODELS` pointed at the bundled weights.
  *
  * The outcome ladder, decided at boot:
- *   "browser"   — not a Tauri window: silent no-op (browser dev, e2e).
+ *   "webview"   — outside the Tauri shell: silent no-op (unit/e2e harness).
  *   "bundled"   — our runtime spawned and answered the health probe.
  *   "external"  — ours did not run (missing binary, or the port was already
  *                 taken by an Ollama the user installed) but something still
@@ -26,7 +26,7 @@ import { resourceDir } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
 import { ollamaBase } from "./gemma";
 
-export type VisionRuntime = "browser" | "bundled" | "external" | "fallback";
+export type VisionRuntime = "webview" | "bundled" | "external" | "fallback";
 
 /** Scope name in src-tauri/capabilities/default.json; cmd is the staged exe. */
 export const VISION_RUNTIME_COMMAND = "vision-runtime";
@@ -80,7 +80,7 @@ export async function startVisionRuntime(
   deps: VisionRuntimeDeps = realDeps,
 ): Promise<VisionRuntime> {
   try {
-    if (!deps.isTauri()) return "browser";
+    if (!deps.isTauri()) return "webview";
 
     let closed: Promise<void>;
     try {

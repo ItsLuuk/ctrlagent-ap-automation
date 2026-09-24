@@ -12,10 +12,6 @@
 import type { AnchorSpec, OcrWord, ZoneField } from "./types";
 import { moneyToNumber, parseDateParts } from "./zones";
 
-function clamp01(v: number): number {
-  return Math.max(0, Math.min(1, v));
-}
-
 /** Cheap string-distance match for finding an anchor word in the OCR stream. */
 function nearestWord(words: OcrWord[], query: string): OcrWord | undefined {
   const needle = query.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
@@ -53,7 +49,7 @@ function sharedCharScore(a: string, b: string): number {
   return matches / longer.length;
 }
 
-export type ApplyResult = { value: string | number; confidence: number } | undefined;
+export type ApplyResult = { value: string | number } | undefined;
 
 /** Reads a single field off a page using a stored anchor. */
 export function applyTemplateField(
@@ -124,12 +120,7 @@ export function applyTemplateField(
     spec.type ?? (type ? inferType(type) : "string");
   const value = normalize(text, fieldType);
   if (value === undefined) return undefined;
-  // Confidence is the geometric mean of word confidences — anchor gets a small
-  // boost because we already committed to a template match.
-  const wordConf = geometricMean(inside.map((w) => w.confidence));
-  const anchorConf = anchor.confidence;
-  const conf = Math.min(0.99, (wordConf * 0.7 + anchorConf * 0.3) * 0.97);
-  return { value, confidence: Number(conf.toFixed(2)) };
+  return { value };
 }
 
 function clamp01(v: number): number {
@@ -140,13 +131,6 @@ function inferType(field: ZoneField): "string" | "number" | "decimal" | "date" {
   if (field === "subtotal" || field === "tax" || field === "total") return "decimal";
   if (field === "issueDate" || field === "dueDate") return "date";
   return "string";
-}
-
-function geometricMean(values: number[]): number {
-  if (values.length === 0) return 0.5;
-  let logSum = 0;
-  for (const v of values) logSum += Math.log(Math.max(0.01, v));
-  return Math.exp(logSum / values.length);
 }
 
 function normalize(

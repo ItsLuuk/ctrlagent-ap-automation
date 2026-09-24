@@ -13,7 +13,7 @@ const invoice = (over: Partial<Invoice> = {}): Invoice =>
     audit: [],
     lineItems: [],
     tags: [],
-    confidence: {},
+    provenance: {},
     createdAt: new Date(0).toISOString(),
     ...over,
   }) as Invoice;

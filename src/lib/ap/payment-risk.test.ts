@@ -10,7 +10,7 @@ const invoice = (over: Partial<Invoice> = {}): Invoice =>
     total: 2340,
     status: "scheduled",
     lineItems: [],
-    confidence: {},
+    provenance: {},
     audit: [],
     ...over,
   }) as unknown as Invoice;

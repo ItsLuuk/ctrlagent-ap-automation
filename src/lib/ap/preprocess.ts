@@ -1,7 +1,7 @@
 /**
- * Browser-side image preprocessing for the invoice pipeline. The rework doc
- * calls for deskew + binarize at ~300 DPI; we can't pull OpenCV into the
- * browser bundle without bloating it, so we approximate the cheap 80% of the
+ * Tauri WebView-side image preprocessing for the invoice pipeline. The rework
+ * doc calls for deskew + binarize at ~300 DPI; we can't pull OpenCV into the
+ * WebView bundle without bloating it, so we approximate the cheap 80% of the
  * win with canvas + the Sauvola-style adaptive threshold below.
  *
  * This is intentionally tiny: the heavy lifting still belongs to the VLM path.

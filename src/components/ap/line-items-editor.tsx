@@ -132,7 +132,7 @@ export function LineItemsEditor({
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card">
+    <section className="rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]">
       <button
         type="button"
         className="flex w-full items-center justify-between border-b border-border px-4 py-2.5"

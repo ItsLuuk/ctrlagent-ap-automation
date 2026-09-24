@@ -15,7 +15,7 @@
  *    URI. Never trust MIME or extension.
  *  - Reject XML > ~5 MB before parsing.
  *  - DOMParser never throws — check for parsererror elements, namespace varies
- *    by browser. Add a truncated-XML fixture so the silent-empty-doc path is
+ *    by WebView. Add a truncated-XML fixture so the silent-empty-doc path is
  *    exercised.
  *  - Namespace discipline: use getElementsByTagNameNS / localName matching.
  *    A querySelector("cbc\\:ID") approach breaks on valid documents that rename
@@ -128,7 +128,7 @@ function tryParseRootOnly(text: string): { local: string; ns: string } | null {
 }
 
 export function hasParseError(doc: Document): boolean {
-  // DOMParser embeds a parsererror element; the namespace differs per browser.
+  // DOMParser embeds a parsererror element; the namespace differs per WebView.
   const pw = doc.getElementsByTagNameNS("http://www.mozilla.org/xmldata", "parsererror");
   if (pw.length > 0) return true;
   const pe = doc.getElementsByTagName("parsererror");

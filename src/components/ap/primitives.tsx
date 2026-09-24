@@ -1,25 +1,6 @@
-/**
- * Primitives — modular, reusable UI building blocks for the AP automation app.
- *
- * These are the containers from foundry.md §5 (Cards & widgets). One card, one
- * empty state, one KPI widget — so the shapes can't drift apart again:
- *  - Section:  the standard card wrapper (16px radius, 1px hairline, bg-card)
- *  - Header:   SectionHeader — 19px/600 title + hint/counter + optional action
- *  - List:     divided rows with consistent padding
- *  - Empty:    EmptyState — zero-state card (dashed hairline, p-12)
- *  - Field:    label + hint + input slot
- *  - Stat:     KPI widget — label / value / hint / optional action
- *  - Pill:     small rounded label
- *
- * Import from '@/components/ap/primitives' — not from ui/card, etc.
- */
-import { type ReactNode } from "react";
+import type { ReactNode } from "react";
 import type { Icon } from "@/components/icons";
 import { cn } from "@/lib/utils";
-
-/* ══════════════════════════════════════════════════════════════════════
-   Section — the standard card wrapper
-   ══════════════════════════════════════════════════════════════════════ */
 
 export function Section({
   children,
@@ -33,8 +14,6 @@ export function Section({
   return (
     <section
       className={cn(
-        // The hairline is the card's separation on the white canvas — without
-        // it a white card on a white page is invisible (foundry.md §5).
         "overflow-hidden rounded-lg border border-border bg-card",
         sticky && "self-start lg:sticky lg:top-2",
         className,
@@ -44,10 +23,6 @@ export function Section({
     </section>
   );
 }
-
-/* ══════════════════════════════════════════════════════════════════════
-   SectionHeader — the repeated header strip
-   ══════════════════════════════════════════════════════════════════════ */
 
 export function SectionHeader({
   title,
@@ -65,7 +40,6 @@ export function SectionHeader({
   return (
     <div
       className={cn(
-        // The strip is split from the body by the same hairline the card uses.
         "flex items-center justify-between border-b border-border px-4 py-3",
         className,
       )}
@@ -82,17 +56,9 @@ export function SectionHeader({
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   List — a divided list container
-   ══════════════════════════════════════════════════════════════════════ */
-
 export function List({ children, className }: { children: ReactNode; className?: string }) {
   return <div className={cn("divide-y divide-border", className)}>{children}</div>;
 }
-
-/* ══════════════════════════════════════════════════════════════════════
-   ListItem — a single row in a List
-   ══════════════════════════════════════════════════════════════════════ */
 
 export function ListItem({
   children,
@@ -105,7 +71,6 @@ export function ListItem({
   className?: string;
   onClick?: () => void;
   active?: boolean;
-  /** Anchor for "jump to this row" actions. */
   id?: string;
 }) {
   return (
@@ -114,7 +79,7 @@ export function ListItem({
       className={cn(
         "px-4 py-3 transition-colors",
         onClick && "cursor-pointer hover:bg-secondary/50",
-        active && "bg-accent/5",
+        active && "bg-accent-soft",
         className,
       )}
       onClick={onClick}
@@ -135,10 +100,6 @@ export function ListItem({
     </div>
   );
 }
-
-/* ══════════════════════════════════════════════════════════════════════
-   FormField — label + hint + content slot
-   ══════════════════════════════════════════════════════════════════════ */
 
 export function FormField({
   label,
@@ -167,14 +128,6 @@ export function FormField({
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   Stat — the KPI widget (foundry.md §5)
-
-   Anatomy is always label / value / hint, plus an optional action for the set
-   the tile summarizes. The value stays at text-2xl so it
-   never outranks the page title, and it is mono + tabular so amounts align.
-   ══════════════════════════════════════════════════════════════════════ */
-
 export function Stat({
   label,
   value,
@@ -185,11 +138,8 @@ export function Stat({
 }: {
   label: string;
   value: ReactNode;
-  /** The unit or the "so what" — required unless the label already carries it. */
   hint: ReactNode;
-  /** An affordance for the set this tile summarizes (e.g. export). */
   action?: ReactNode;
-  /** The one tile per band that needs action; never a second chromatic fill. */
   accent?: boolean;
   className?: string;
 }) {
@@ -197,7 +147,7 @@ export function Stat({
     <div
       className={cn(
         "rounded-xl border border-border bg-card p-5",
-        accent && "bg-primary/10",
+        accent && "border-primary/30 bg-primary-soft",
         className,
       )}
     >
@@ -208,18 +158,6 @@ export function Stat({
     </div>
   );
 }
-
-/* ══════════════════════════════════════════════════════════════════════
-   EmptyState — the zero-state of a page, queue or list
-
-   One component, two densities (foundry.md §5):
-   - "card" (default) — replaces the whole container, so it is never nested in
-     another card. Dashed hairline, p-12, always a title plus the trigger
-     sentence that says what makes the state fill in.
-   - "inline" — the quiet empty body of a card that stays because it has a
-     header or totals (a line-items table, a list beside a document preview).
-     No container of its own, p-8, text-xs.
-   ══════════════════════════════════════════════════════════════════════ */
 
 export function EmptyState({
   icon: Icon,
@@ -232,7 +170,6 @@ export function EmptyState({
   icon?: Icon;
   title: string;
   action?: ReactNode;
-  /** The full-card trigger sentence: what makes this state fill in. */
   children?: ReactNode;
   variant?: "card" | "inline";
   className?: string;
@@ -261,46 +198,87 @@ export function EmptyState({
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   Pill — small rounded label / badge
-   ══════════════════════════════════════════════════════════════════════ */
+const TONE_LABEL: Record<StatusTone, string> = {
+  neutral: "Neutral",
+  success: "Success",
+  warning: "Warning",
+  danger: "Error",
+  info: "Information",
+};
+const TONE_STYLE: Record<StatusTone, string> = {
+  neutral: "border-border bg-secondary text-secondary-foreground",
+  success: "border-success/25 bg-success-soft text-success-soft-foreground",
+  warning: "border-warning/30 bg-warning-soft text-warning-soft-foreground",
+  danger: "border-destructive/30 bg-danger-soft text-danger-soft-foreground",
+  info: "border-primary/25 bg-accent-soft text-accent-soft-foreground",
+};
+export type StatusTone = "neutral" | "success" | "warning" | "danger" | "info";
 
-export function Pill({
+export function StatusPill({
+  tone = "neutral",
+  dot = false,
+  pulse = false,
   children,
-  variant = "default",
-  className,
-  mono,
+  className = "",
 }: {
+  tone?: StatusTone;
+  dot?: boolean | undefined;
+  pulse?: boolean | undefined;
   children: ReactNode;
-  variant?: "default" | "accent" | "success" | "warning" | "destructive" | "outline";
-  className?: string;
-  mono?: boolean;
+  className?: string | undefined;
 }) {
-  const styles = {
-    default: "text-muted-foreground",
-    accent: "text-foundry-link",
-    success: "text-foreground",
-    warning: "text-warning-foreground",
-    destructive: "text-destructive",
-    outline: "border border-border text-muted-foreground",
-  };
   return (
     <span
+      aria-label={TONE_LABEL[tone]}
       className={cn(
-        "inline-flex items-center rounded-full px-1 py-0.5 text-xs font-semibold tracking-tight",
-        styles[variant],
-        mono && "font-mono",
+        "inline-flex h-6 items-center rounded-full border px-2.5 text-xs font-semibold",
+        TONE_STYLE[tone],
         className,
       )}
     >
+      {dot ? (
+        <span
+          aria-hidden="true"
+          className={cn("mr-1.5 size-1.5 rounded-full bg-current", pulse && "animate-pulse")}
+        />
+      ) : null}
       {children}
     </span>
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   Badge — status indicator with dot
-   ══════════════════════════════════════════════════════════════════════ */
+/** @deprecated Use StatusPill. */
+export function Pill({
+  children,
+  variant = "default",
+  className,
+  mono,
+  tone,
+}: {
+  children: ReactNode;
+  variant?: "default" | "accent" | "success" | "warning" | "destructive" | "outline";
+  className?: string;
+  mono?: boolean;
+  tone?: StatusTone;
+}) {
+  const mappedTone =
+    tone ??
+    (
+      {
+        default: "neutral",
+        accent: "info",
+        success: "success",
+        warning: "warning",
+        destructive: "danger",
+        outline: "neutral",
+      } as const
+    )[variant];
+  return (
+    <StatusPill className={cn(mono && "font-mono", className)} tone={mappedTone}>
+      {children}
+    </StatusPill>
+  );
+}
 
 export function Badge({
   label,
@@ -313,38 +291,27 @@ export function Badge({
   dot?: boolean;
   className?: string;
 }) {
-  const dotColor = {
-    default: "bg-muted-foreground",
-    success: "bg-success",
-    warning: "bg-warning",
-    destructive: "bg-destructive",
-    info: "bg-info",
-  };
   return (
-    <span
-      className={cn(
-        "inline-flex items-center gap-1.5 border-l-[3px] py-0.5 pl-2 pr-1 text-xs font-medium text-foreground",
-        variant === "success" && "border-success",
-        variant === "warning" && "border-warning",
-        variant === "destructive" && "border-destructive",
-        variant === "info" && "border-info",
-        variant === "default" && "border-border",
-        className,
-      )}
+    <StatusPill
+      className={className}
+      dot={dot}
+      tone={
+        variant === "default"
+          ? "neutral"
+          : variant === "destructive"
+            ? "danger"
+            : variant === "info"
+              ? "info"
+              : variant
+      }
     >
-      {dot && <span className={cn("size-1.5 rounded-full", dotColor[variant])} />}
       {label}
-    </span>
+    </StatusPill>
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   PageHeader — back link + title + subtitle + right-side controls
-   ══════════════════════════════════════════════════════════════════════ */
-
 export function PageHeader({
   backLink,
-  backLabel,
   title,
   subtitle,
   controls,
@@ -371,10 +338,6 @@ export function PageHeader({
   );
 }
 
-/* ══════════════════════════════════════════════════════════════════════
-   InfoBanner — contextual info/warning strip
-   ══════════════════════════════════════════════════════════════════════ */
-
 export function InfoBanner({
   children,
   variant = "accent",
@@ -387,10 +350,10 @@ export function InfoBanner({
   className?: string;
 }) {
   const styles = {
-    accent: "border-accent/30 bg-accent/5 text-accent-foreground",
-    warning: "border-warning/40 bg-warning/10 text-warning-foreground",
-    destructive: "border-destructive/40 bg-destructive/10 text-destructive-foreground",
-    success: "border-success/30 bg-success/10 text-success-foreground",
+    accent: "border-accent/30 bg-accent-soft text-accent-soft-foreground",
+    warning: "border-warning/40 bg-warning-soft text-warning-soft-foreground",
+    destructive: "border-danger/40 bg-danger-soft text-danger-soft-foreground",
+    success: "border-success/30 bg-success-soft text-success-soft-foreground",
   };
   return (
     <div

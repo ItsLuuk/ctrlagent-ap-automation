@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, Check, Loader2, PenLine, Send } from "@/components/icons";
+import { AlertTriangle, Check, Loader2, Send } from "@/components/icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,7 +35,13 @@ import { RecordDetails } from "@/components/ap/record-details";
 import { buildApprovalVerdict, correctionAction } from "@/lib/ap/approval";
 import { matchInvoiceToPo } from "@/lib/ap/matching";
 import { suggestPo } from "@/lib/ap/po-store";
-import { isFrozen, freezeLabel, type Actor, type TransitionId } from "@/lib/ap/state-machine";
+import {
+  freezeLabel,
+  handoffMarkerInForce,
+  isFrozen,
+  type Actor,
+  type TransitionId,
+} from "@/lib/ap/state-machine";
 import {
   APPROVAL_AHEAD,
   CURRENCY_OPTIONS,
@@ -51,10 +57,7 @@ import {
 } from "@/lib/ap/types";
 import { erpRefsFor, syncStateFor } from "@/lib/ap/erp-sync";
 import { cn } from "@/lib/utils";
-import { countOf } from "@/lib/ap/vocabulary";
 import { processingStageLabel } from "@/lib/ap/processing-errors";
-
-const LOW_CONFIDENCE_THRESHOLD = 0.75;
 
 export const Route = createFileRoute("/invoices/$id")({
   head: () => ({
@@ -112,7 +115,7 @@ function ProcessingInvoice({ invoice }: { invoice: Invoice }) {
   return (
     <Shell>
       <ReviewHeader invoice={invoice} />
-      <div className="mt-6 rounded-lg border border-border bg-card p-8 text-center">
+      <div className="mt-6 rounded-lg border border-border bg-card p-8 text-center shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_40px_rgba(0,0,0,0.07)]">
         <Loader2 className="mx-auto size-7 animate-spin text-muted-foreground" />
         <p className="mt-4 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
           Preparing → Ready to review
@@ -189,17 +192,22 @@ const FOCUSABLE_EXTRA_FIELDS: ZoneField[] = [
 ];
 
 function Detail({ invoice }: { invoice: Invoice }) {
-  const { updateInvoice, applyTransition, upsertTemplate, purchaseOrders, linkPo, vendors } =
-    useAp();
+  const {
+    updateInvoice,
+    applyTransition,
+    upsertTemplate,
+    purchaseOrders,
+    linkPo,
+    vendors,
+    operator,
+  } = useAp();
   const navigate = useNavigate();
   const [legacyZoneEdit, setLegacyZoneEdit] = useState(false);
   const [focusedField, setFocusedField] = useState<ZoneField | undefined>(undefined);
 
   const syncState = syncStateFor(invoice.id);
   const erpRefs = erpRefsFor(invoice.id);
-  const hasHandoffMarker = invoice.audit.some(
-    (entry) => entry.action === "Marked ready for external handoff",
-  );
+  const hasHandoffMarker = handoffMarkerInForce(invoice);
   const startManualReview = () => {
     updateInvoice(
       invoice.id,
@@ -216,28 +224,17 @@ function Detail({ invoice }: { invoice: Invoice }) {
   const useDraftMapperView =
     invoice.status === "draft" && invoice.source === "upload" && !invoice.processing;
 
-  const lowConfidence = (Object.keys(invoice.confidence) as ExtractedField[]).filter(
-    (k) => (invoice.confidence[k] ?? 1) < LOW_CONFIDENCE_THRESHOLD,
-  );
-  const isLow = (confidence: number | undefined) =>
-    confidence !== undefined && confidence < LOW_CONFIDENCE_THRESHOLD;
-
-  /** Demo personas per phase role (until real auth exists). SoD is enforced
-   *  by the state machine, not by hiding buttons. The `actingAs` identity is
-   *  shown on screen so the user always knows whose signature they are putting
-   *  on the record — today this names a real person the app invented, which is
-   *  the bug: two people using the same device would both sign as Dana and SoD
-   *  would compare an alias against itself. */
-  const actors = {
-    processor: { name: "Luuk Koppen", roles: ["processor"] } as Actor,
-    approver: { name: "Dana Whitfield", roles: ["approver"] } as Actor,
-    treasury: { name: "Payments", roles: ["treasury"] } as Actor,
-  };
-
-  /** The persona whose name goes on this screen's actions and audit entries.
-   *  Shown in the header so the user always knows who they are acting as. */
-  const editor = invoice.status === "review" ? actors.approver : actors.processor;
-
+  /**
+   * The one person running this install signs every action on this screen.
+   *
+   * It used to be a trio of invented colleagues — a processor, an approver and
+   * a "Payments" box — picked per phase to satisfy the role gates. That made
+   * every signature fiction, and two people sharing a device would both have
+   * signed as the same invented processor, so the name-based SoD comparison
+   * compared an alias against itself. One operator holding all three human
+   * roles is both the truth and what the gates need; the gates themselves are
+   * untouched, and the machine still signs extraction events as `system`.
+   */
   /** The comparison runs against the linked purchase order, so no link means
    *  there is nothing on our side to match the lines against. */
   const linkedPo = invoice.poId ? purchaseOrders.find((p) => p.id === invoice.poId) : undefined;
@@ -310,7 +307,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
       patchValue,
       correctionAction(label),
       `was ${before || "empty"} → ${after || "empty"}`,
-      editor.name,
+      operator.name,
     );
     if (!applied.accepted) {
       // The record moved under the editor (an approval landing mid-edit, say):
@@ -357,7 +354,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
       { lineItems: next },
       correctionAction("line items"),
       "Line items changed while reviewing.",
-      editor.name,
+      operator.name,
     );
   };
   const onLineItemsChange = (items: LineItem[]) => {
@@ -412,12 +409,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
     opts?.onDone?.();
   };
 
-  /** The draft mapper is the only screen that states read confidence: by review
-   *  time every row carries its own chip, so a banner here would be a count of
-   *  information already marked where it matters. */
-  const lowConfidenceNotice =
-    lowConfidence.length > 0 ? <LowConfidenceNotice count={lowConfidence.length} /> : null;
-
   /* ── Editable pieces of the compare list ────────────────────────────── */
 
   function lockedField(label: string, value: ReactNode) {
@@ -456,7 +447,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <EditableValue
             label="Address"
             value={invoice.address ?? ""}
-            low={isLow(invoice.confidence.address)}
             onCommit={(v) => correct("address", "Address", v)}
           />
         ),
@@ -465,7 +455,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
             label="IBAN"
             mono
             value={invoice.iban ?? ""}
-            low={isLow(invoice.confidence.iban)}
             onCommit={(v) => correct("iban", "IBAN", v)}
           />
         ),
@@ -491,7 +480,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <EditableValue
             label="Invoice no."
             value={invoice.invoiceNumber}
-            low={isLow(invoice.confidence.invoiceNumber)}
             onCommit={(v) => correct("invoiceNumber", "Invoice no.", v)}
           />
         ),
@@ -744,7 +732,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
         {invoice.status === "draft" ? (
           <Button
             className="gap-2"
-            onClick={() => advance("confirm", actors.processor, "Sent for approval")}
+            onClick={() => advance("confirm", operator, "Sent for approval")}
           >
             <Send className="size-4" /> Submit for approval
           </Button>
@@ -753,7 +741,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <Button
             className="gap-2"
             onClick={() =>
-              advance("release", actors.treasury, "Invoice marked ready for external handoff", {
+              advance("release", operator, "Invoice marked ready for external handoff", {
                 reason: "Approved invoice marked ready for external handoff",
               })
             }
@@ -770,7 +758,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <Button
             variant="outline"
             className="gap-2"
-            onClick={() => advance("reopen-draft", actors.processor, "Reopened as draft")}
+            onClick={() => advance("reopen-draft", operator, "Reopened as draft")}
           >
             Reopen as draft
           </Button>
@@ -790,7 +778,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
   return (
     <Shell>
       {useDraftMapperView ? (
-        <DraftMapper invoice={invoice} banner={lowConfidenceNotice} />
+        <DraftMapper invoice={invoice} />
       ) : (
         <>
           <ReviewHeader invoice={invoice} />
@@ -827,7 +815,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           )}
 
           <div className="mt-5 grid gap-5 pb-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <section className="self-start overflow-hidden rounded-lg border border-border bg-card lg:sticky lg:top-2">
+            <section className="self-start overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)] lg:sticky lg:top-2">
               <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
                 <p className="text-xs font-medium text-muted-foreground">Document</p>
                 <div className="flex items-center gap-2">
@@ -889,7 +877,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
               vendorHeader={
                 <VendorProfile
                   vendor={invoice.vendor}
-                  confidence={invoice.confidence.vendor}
                   sourcePage={invoice.fieldSources?.vendor}
                   showPage={(invoice.pageCount ?? 1) > 1}
                   // A frozen record takes no vendor patch either: the menu drops
@@ -919,18 +906,16 @@ function Detail({ invoice }: { invoice: Invoice }) {
             blocked={approvalIsAhead && !verdict.canApprove}
             amount={invoice.total}
             currency={invoice.currency}
-            onApprove={() => advance("approve", actors.approver, "Invoice approved")}
-            onQuery={(reason) => advance("query", actors.approver, "Query sent", { reason })}
-            onReject={(reason) =>
-              advance("reject", actors.approver, "Invoice rejected", { reason })
-            }
+            onApprove={() => advance("approve", operator, "Invoice approved")}
+            onQuery={(reason) => advance("query", operator, "Query sent", { reason })}
+            onReject={(reason) => advance("reject", operator, "Invoice rejected", { reason })}
             onReviewNext={approvalIsAhead ? reviewNext : undefined}
             {...(invoice.status === "scheduled"
               ? {
                   // The door back in: signed, so an approver retracts it with a
                   // reason in the trail — the only way the frozen fields move.
                   onReopen: (reason: string) =>
-                    advance("re-open", actors.approver, "Re-opened for approval", { reason }),
+                    advance("re-open", operator, "Re-opened for approval", { reason }),
                 }
               : {})}
             {...(statusActions ? { actions: statusActions } : {})}
@@ -939,23 +924,6 @@ function Detail({ invoice }: { invoice: Invoice }) {
         </>
       )}
     </Shell>
-  );
-}
-
-/**
- * The read-confidence sentence, written once — the draft mapper's banner renders
- * it in a box, on the screen where the values are still being read.
- */
-function lowConfidenceLine(count: number): string {
-  return `${countOf(count, "field")} read with low confidence — check the highlighted values against the document.`;
-}
-
-function LowConfidenceNotice({ count }: { count: number }) {
-  return (
-    <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
-      <PenLine className="mt-0.5 size-4 text-warning-foreground" />
-      <p className="text-warning-foreground">{lowConfidenceLine(count)}</p>
-    </div>
   );
 }
 
@@ -969,14 +937,12 @@ function EditableValue({
   onCommit,
   type = "text",
   mono,
-  low,
 }: {
   label: string;
   value: string;
   onCommit: (next: string) => void;
   type?: string;
   mono?: boolean;
-  low?: boolean | undefined;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => {
@@ -1001,11 +967,7 @@ function EditableValue({
           event.currentTarget.blur();
         }
       }}
-      className={cn(
-        "mt-0.5 h-9 text-sm",
-        mono || type === "number" ? "font-mono" : "",
-        low ? "border-warning bg-warning/10" : "",
-      )}
+      className={cn("mt-0.5 h-9 text-sm", mono || type === "number" ? "font-mono" : "")}
     />
   );
 }

@@ -5,8 +5,8 @@
 /*
  * Foundry design system — implementation in Tailwind v4 @theme.
  * Spec: Branding/design/*. Spec tokens: radius pill/card/float/sm/input,
- * Action Blue, Foundry Orange/Amber. One surface only — the light gallery the
- * reviewer sits in all day.
+ * Dark operational theme. The canvas stays near-black while cards, controls,
+ * and navigation use a raised zinc surface.
  */
 
 /* ── Font faces: Open Sauce One (self-hosted, spec weights only) ────── */
@@ -51,6 +51,25 @@
   --radius-4xl: calc(var(--radius) + 16px);
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-foreground: var(--surface-foreground);
+  --color-surface-secondary: var(--surface-secondary);
+  --color-surface-tertiary: var(--surface-tertiary);
+  --color-overlay: var(--overlay);
+  --color-overlay-foreground: var(--overlay-foreground);
+  --color-border: var(--border);
+  --color-separator: var(--separator);
+  --color-focus: var(--focus);
+  --color-link: var(--link);
+  --color-default: var(--default);
+  --color-default-foreground: var(--default-foreground);
+  --color-field: var(--field-background);
+  --color-field-foreground: var(--field-foreground);
+  --color-field-placeholder: var(--field-placeholder);
+  --color-field-border: var(--field-border);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-soft-hover: var(--accent-soft-hover);
+  --color-surface-inverse: var(--black);
   --color-card: var(--card);
   --color-card-foreground: var(--card-foreground);
   --color-popover: var(--popover);
@@ -63,6 +82,19 @@
   --color-muted-foreground: var(--muted-foreground);
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-soft-foreground: var(--accent-soft-foreground);
+  --color-danger: var(--destructive);
+  --color-danger-foreground: var(--destructive-foreground);
+  --color-danger-soft: var(--destructive-soft);
+  --color-danger-soft-foreground: var(--destructive-soft-foreground);
+  --color-danger-hover: var(--danger-hover);
+  --color-success-hover: var(--success-hover);
+  --color-warning-hover: var(--warning-hover);
+  --color-success-soft: var(--success-soft);
+  --color-success-soft-foreground: var(--success-soft-foreground);
+  --color-warning-soft: var(--warning-soft);
+  --color-warning-soft-foreground: var(--warning-soft-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
   --color-border: var(--border);
@@ -81,19 +113,6 @@
   --color-success-foreground: var(--success-foreground);
   --color-warning: var(--warning);
   --color-warning-foreground: var(--warning-foreground);
-  --color-foundry-orange: var(--foundry-orange);
-  --color-foundry-amber: var(--foundry-amber);
-  --color-foundry-link: var(--foundry-link);
-  --color-silk: #f5f5f7;
-  --color-hairline: #d2d2d7;
-  --color-control-gray: #e6e6e8;
-  --color-steel: #86868b;
-  --color-slate: #6e6e73;
-  --color-smoke: #333336;
-  --color-ink: #1d1d1f;
-  --color-category-magenta: #cb30e0;
-  --color-category-violet: #8668ff;
-  --color-category-teal: #00a1b3;
   --radius-pill: 9999px;
   --radius-card: 28px;
   --radius-float: 20px;
@@ -101,24 +120,7 @@
   --radius-input: 12px;
   --radius-link: 10px;
   --radius-glass: 36px;
-  --shadow-ring: 0 0 0 1px #e6e6e8;
-  --shadow-ring-strong: 0 0 0 1px #86868b;
-  --shadow-ring-dark: 0 0 0 1px rgba(255, 255, 255, 0.08);
-  --shadow-ambient: 0 0 30px 0 rgba(16, 16, 16, 0.1);
-  --shadow-whisper:
-    0 0 0 1px rgba(0, 0, 0, 0.04), 0 1px 1px 0.5px rgba(0, 0, 0, 0.02),
-    0 3px 3px 1.5px rgba(0, 0, 0, 0.02), 0 6px 6px -3px rgba(0, 0, 0, 0.02),
-    0 12px 12px -6px rgba(0, 0, 0, 0.02), 0 24px 24px -12px rgba(0, 0, 0, 0.02);
-  --gradient-molten: linear-gradient(0deg, #f56900 0%, #f7be00 100%);
-  --gradient-prismatic: linear-gradient(
-    108deg,
-    rgb(0, 144, 247),
-    rgb(186, 98, 252) 33%,
-    rgb(242, 65, 107) 66%,
-    rgb(245, 105, 0)
-  );
-  --color-info: var(--info);
-  --color-info-foreground: var(--info-foreground);
+
   --font-sans: "Open Sauce One", ui-sans-serif, system-ui, sans-serif;
   --font-display: "Open Sauce One", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Open Sauce One", ui-monospace, monospace;
@@ -168,63 +170,191 @@
   --text-hero--letter-spacing: -1.2px;
   --animate-zone-flash: zone-flash 700ms var(--ease-out-expo) both;
   --animate-field-land: field-land 500ms var(--ease-out-expo) both;
+  --animate-card-enter: card-enter 420ms var(--ease-out-expo) both;
+  --animate-status-pulse: status-pulse 1.8s ease-in-out infinite;
 }
 
-/* ── Foundry palette (DESIGN Foundry.md wins) ────────────────────────── */
-:root {
+/* ── HeroUI-inspired semantic palette ───────────────────────────────────
+ * The application uses a small, intentional set of role-based colors.
+ * Base roles are declared once; state colors are derived from the same
+ * accent/surface colors so components remain visually consistent.
+ * ---------------------------------------------------------------------- */
+:root,
+:root.dark,
+:root[data-theme="dark"] {
+  color-scheme: dark;
   --radius: 1rem;
 
-  /* Canvas — white; alternate bands in Silk */
-  --background: #ffffff;
-  --card: #ffffff;
-  --popover: #ffffff;
-  --muted: #f5f5f7;
-  --secondary: #f5f5f7;
+  /* Primitives */
+  --white: oklch(1 0 0);
+  --black: oklch(0.145 0 0);
+  --snow: oklch(0.985 0 0);
+  --eclipse: oklch(0.205 0.006 286);
 
-  /* Text — Ink primary, Slate secondary */
-  --foreground: #1d1d1f;
-  --card-foreground: #1d1d1f;
-  --popover-foreground: #1d1d1f;
-  --muted-foreground: #6e6e73;
-  --secondary-foreground: #1d1d1f;
+  /* Canvas, surfaces, and content */
+  --background: var(--black);
+  --foreground: var(--snow);
+  --surface: var(--eclipse);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: oklch(0.269 0.006 286);
+  --surface-secondary-foreground: var(--foreground);
+  --surface-tertiary: oklch(0.32 0.006 286);
+  --surface-tertiary-foreground: var(--foreground);
+  --overlay: var(--eclipse);
+  --overlay-foreground: var(--foreground);
+  --muted: oklch(0.708 0.022 286);
+  --muted-foreground: var(--muted);
+  --border: oklch(0.32 0.006 286);
+  --input: var(--border);
+  --separator: oklch(0.235 0.006 286);
+  --backdrop: oklch(0 0 0 / 0.72);
 
-  /* Action — single Action Blue fill; light-blue wash for highlights */
-  --primary: #0071e3;
-  --primary-foreground: #ffffff;
-  --accent: #e8f1fd;
-  --accent-foreground: #004999;
+  /* Primary action and focus */
+  --accent: oklch(0.6204 0.195 253.83);
+  --accent-foreground: var(--snow);
+  --accent-hover: oklch(0.565 0.205 253.83);
+  --accent-soft: oklch(0.29 0.075 253.83);
+  --accent-soft-foreground: oklch(0.88 0.09 253.83);
+  --accent-soft-hover: oklch(0.35 0.09 253.83);
+  --focus: var(--accent);
+  --ring: var(--accent);
+  --link: var(--foreground);
 
-  /* Hairlines + Steel rings; blue focus ring */
-  --border: #d2d2d7;
-  --input: #86868b;
-  --ring: #0071e3;
+  /* Neutral controls */
+  --default: oklch(0.269 0.006 286);
+  --default-foreground: var(--foreground);
+  --default-hover: oklch(0.32 0.006 286);
+  --secondary: var(--surface-secondary);
+  --secondary-foreground: var(--foreground);
 
-  /* Semantic — Foundry roles only */
-  --destructive: #d92d20;
-  --destructive-foreground: #ffffff;
-  --success: #34c759;
-  --success-foreground: #0c5c22;
-  --warning: #f7be00;
-  --warning-foreground: #5c4300;
-  --info: #0071e3;
-  --info-foreground: #ffffff;
+  /* Semantic status colors */
+  --success: oklch(0.72 0.17 150);
+  --success-foreground: var(--eclipse);
+  --success-hover: oklch(0.77 0.16 150);
+  --success-soft: oklch(0.28 0.07 150);
+  --success-soft-foreground: oklch(0.88 0.12 150);
+  --success-soft-hover: oklch(0.34 0.08 150);
+  --warning: oklch(0.79 0.16 85);
+  --warning-foreground: var(--eclipse);
+  --warning-hover: oklch(0.84 0.15 85);
+  --warning-soft: oklch(0.31 0.07 75);
+  --warning-soft-foreground: oklch(0.9 0.11 85);
+  --warning-soft-hover: oklch(0.37 0.08 75);
+  --danger: oklch(0.62 0.22 25);
+  --danger-foreground: var(--snow);
+  --danger-hover: oklch(0.68 0.2 25);
+  --danger-soft: oklch(0.3 0.08 25);
+  --danger-soft-foreground: oklch(0.9 0.1 25);
+  --danger-soft-hover: oklch(0.36 0.09 25);
+  --destructive: var(--danger);
+  --destructive-foreground: var(--danger-foreground);
+  --destructive-soft: var(--danger-soft);
+  --destructive-soft-foreground: var(--danger-soft-foreground);
 
-  /* Foundry brand accents (text/outline only — never fills) */
-  --foundry-orange: #f56900;
-  --foundry-amber: #f7be00;
-  --foundry-link: #0066cc;
+  /* Form fields */
+  --field-background: var(--surface-secondary);
+  --field-foreground: var(--foreground);
+  --field-placeholder: var(--muted);
+  --field-border: var(--border);
+  --field-hover: var(--surface-tertiary);
+  --field-focus: var(--accent);
+  --field-border-hover: var(--muted);
+  --field-border-focus: var(--accent);
 
-  /* Sidebar — Ink */
-  --sidebar: #1d1d1f;
-  --sidebar-foreground: #f5f5f7;
-  --sidebar-primary: #0071e3;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #333336;
-  --sidebar-accent-foreground: #f5f5f7;
-  --sidebar-border: #333336;
-  --sidebar-ring: #0071e3;
+  /* Local aliases used by existing components */
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --primary-hover: var(--accent-hover);
+  --primary-soft: var(--accent-soft);
+  --primary-soft-foreground: var(--accent-soft-foreground);
+  --card: var(--surface);
+  --card-foreground: var(--surface-foreground);
+  --popover: var(--overlay);
+  --popover-foreground: var(--overlay-foreground);
+  --status-success: var(--success-soft-foreground);
+  --status-success-soft: var(--success-soft);
+  --status-warning: var(--warning-soft-foreground);
+  --status-warning-soft: var(--warning-soft);
+  --status-danger: var(--danger-soft-foreground);
+  --status-danger-soft: var(--danger-soft);
+  --status-info: var(--accent-soft-foreground);
+  --status-info-soft: var(--accent-soft);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--surface-secondary);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+}
 
-  /* Charts */
+/* Optional light theme. The app defaults to dark, but all components use the
+   same semantic roles when the document opts into light mode. */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --background: oklch(0.965 0 0);
+  --foreground: var(--eclipse);
+  --surface: var(--white);
+  --surface-foreground: var(--foreground);
+  --surface-secondary: oklch(0.945 0.002 286);
+  --surface-tertiary: oklch(0.925 0.002 286);
+  --overlay: var(--white);
+  --overlay-foreground: var(--foreground);
+  --muted: oklch(0.48 0.014 286);
+  --muted-foreground: var(--muted);
+  --border: oklch(0.88 0.004 286);
+  --input: var(--border);
+  --separator: oklch(0.91 0.004 286);
+  --backdrop: oklch(0 0 0 / 0.5);
+  --accent: oklch(0.6204 0.195 253.83);
+  --accent-foreground: var(--snow);
+  --accent-hover: oklch(0.565 0.205 253.83);
+  --accent-soft: oklch(0.93 0.035 253.83);
+  --accent-soft-foreground: oklch(0.42 0.13 253.83);
+  --accent-soft-hover: oklch(0.88 0.06 253.83);
+  --focus: var(--accent);
+  --ring: var(--accent);
+  --link: var(--foreground);
+  --default: var(--surface-tertiary);
+  --default-foreground: var(--foreground);
+  --default-hover: oklch(0.89 0.003 286);
+  --secondary: var(--surface-secondary);
+  --secondary-foreground: var(--foreground);
+  --field-background: var(--white);
+  --field-foreground: var(--foreground);
+  --field-placeholder: var(--muted);
+  --field-border: var(--border);
+  --field-hover: oklch(0.97 0 0);
+  --field-focus: var(--accent);
+  --primary: var(--accent);
+  --primary-foreground: var(--accent-foreground);
+  --primary-hover: var(--accent-hover);
+  --primary-soft: var(--accent-soft);
+  --primary-soft-foreground: var(--accent-soft-foreground);
+  --success-soft: oklch(0.94 0.04 150);
+  --success-soft-foreground: oklch(0.42 0.13 150);
+  --success-soft-hover: oklch(0.89 0.06 150);
+  --warning-soft: oklch(0.95 0.05 85);
+  --warning-soft-foreground: oklch(0.45 0.12 75);
+  --warning-soft-hover: oklch(0.9 0.07 85);
+  --danger-soft: oklch(0.95 0.04 25);
+  --danger-soft-foreground: oklch(0.48 0.18 25);
+  --danger-soft-hover: oklch(0.9 0.07 25);
+  --destructive-soft: var(--danger-soft);
+  --destructive-soft-foreground: var(--danger-soft-foreground);
+  --card: var(--surface);
+  --card-foreground: var(--surface-foreground);
+  --popover: var(--overlay);
+  --popover-foreground: var(--overlay-foreground);
+  --sidebar: var(--surface);
+  --sidebar-foreground: var(--foreground);
+  --sidebar-primary: var(--accent);
+  --sidebar-primary-foreground: var(--accent-foreground);
+  --sidebar-accent: var(--surface-secondary);
+  --sidebar-accent-foreground: var(--foreground);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
 }
 
 @layer base {
@@ -233,6 +363,7 @@
   }
 
   body {
+    min-height: 100vh;
     background-color: var(--color-background);
     color: var(--color-foreground);
   }
@@ -272,6 +403,41 @@
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
   }
+}
+
+/* Surfaces arrive with the same quick expo-out used by extraction, keeping
+   route and card changes tactile without adding decorative motion. */
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.48; }
+}
+
+@keyframes card-enter {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.995);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.ap-status-pill {
+  gap: 0.375rem;
+  font-weight: 600;
+}
+
+.ap-status-pill__dot {
+  width: 0.375rem;
+  height: 0.375rem;
+  flex: none;
+  border-radius: 999px;
+  background: currentColor;
+}
+
+.ap-status-pill--pulse .ap-status-pill__dot {
+  animation: var(--animate-status-pulse);
 }
 
 /* ── Extraction reveal — the signature moment: extracted fields travel from

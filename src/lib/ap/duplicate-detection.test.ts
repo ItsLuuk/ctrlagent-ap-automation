@@ -37,7 +37,7 @@ function stubInvoice(
     department: "",
     memo: "",
     tags: [],
-    confidence: {},
+    provenance: {},
     audit: [],
     source: "upload",
   };

@@ -226,7 +226,7 @@ describe("hasParseError", () => {
     expect(hasParseError(doc)).toBe(true);
   });
 
-  it("returns true for a parsererror in a browser-specific namespace", () => {
+  it("returns true for a parsererror in a WebView-specific namespace", () => {
     // The generic-case test above already covers the common path; this is a
     // characterisation of the mozilla namespace we also check.
     const doc = new DOMParser().parseFromString(`<?xml version="1.0"?><foo><bar>`, "text/xml");

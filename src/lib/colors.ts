@@ -19,7 +19,7 @@ export const color = {
   accent: "var(--accent)",
   accentForeground: "var(--accent-foreground)",
 
-  /** Primary — Action Blue #0071e3 */
+  /** Primary — the single interactive blue */
   primary: "var(--primary)",
   primaryForeground: "var(--primary-foreground)",
 
@@ -34,10 +34,6 @@ export const color = {
   /** Destructive — red (error, rejected) */
   destructive: "var(--destructive)",
   destructiveForeground: "var(--destructive-foreground)",
-
-  /** Info — blue (informational) */
-  info: "var(--info)",
-  infoForeground: "var(--info-foreground)",
 
   /** Neutral surfaces */
   background: "var(--background)",
@@ -79,30 +75,72 @@ type ColorClasses = {
   border: string;
   borderSubtle: string;
   ring: string;
+  softText?: string;
 };
 
-function makeColorClasses(bg: string, text: string, border: string): ColorClasses {
+function makeColorClasses(
+  bg: string,
+  text: string,
+  border: string,
+  softBg = bg,
+  softText = text,
+  softBorder = border,
+): ColorClasses {
   return {
     bg,
-    bgSubtle: bg.replace("bg-", "bg-") + "/5",
-    bgMuted: bg.replace("bg-", "bg-") + "/15",
+    bgSubtle: softBg,
+    bgMuted: softBg,
     text,
     border,
-    borderSubtle: border.replace("border-", "border-") + "/30",
+    borderSubtle: softBorder,
     ring: bg.replace("bg-", "ring-") + "/20",
+    // Keep semantic text readable on soft surfaces.
+    softText,
   };
 }
 
 export const colorClasses = {
-  accent: makeColorClasses("bg-accent", "text-accent-foreground", "border-accent"),
-  success: makeColorClasses("bg-success", "text-success-foreground", "border-success"),
-  warning: makeColorClasses("bg-warning", "text-warning-foreground", "border-warning"),
+  accent: makeColorClasses(
+    "bg-accent",
+    "text-accent-foreground",
+    "border-accent",
+    "bg-accent-soft",
+    "text-accent-soft-foreground",
+    "border-accent/20",
+  ),
+  success: makeColorClasses(
+    "bg-success",
+    "text-success-foreground",
+    "border-success",
+    "bg-success-soft",
+    "text-success-soft-foreground",
+    "border-success/20",
+  ),
+  warning: makeColorClasses(
+    "bg-warning",
+    "text-warning-foreground",
+    "border-warning",
+    "bg-warning-soft",
+    "text-warning-soft-foreground",
+    "border-warning/20",
+  ),
   destructive: makeColorClasses(
     "bg-destructive",
     "text-destructive-foreground",
     "border-destructive",
+    "bg-danger-soft",
+    "text-danger-soft-foreground",
+    "border-danger/20",
   ),
-  info: makeColorClasses("bg-info", "text-info-foreground", "border-info"),
+  // Informational states reuse the product's only interactive blue.
+  info: makeColorClasses(
+    "bg-primary",
+    "text-primary-foreground",
+    "border-primary",
+    "bg-primary-soft",
+    "text-primary-soft-foreground",
+    "border-primary/20",
+  ),
   muted: makeColorClasses("bg-muted", "text-muted-foreground", "border-muted"),
   secondary: makeColorClasses("bg-secondary", "text-secondary-foreground", "border-secondary"),
 } as const;
@@ -117,18 +155,18 @@ import type { InvoiceStatus } from "./ap/types";
 /**
  * Stage tone map — strip language shared with TagBadge.
  * Words are always foreground ink; hue lives only in the 3px left
- * border + dot/icon. Foundry tokens only, never fills.
+ * border + dot/icon. Semantic tokens only, never fills.
  */
 export const STATUS_TONES: Record<InvoiceStatus, { text: string; pulse?: boolean }> = {
-  vendor_profile: { text: "text-foundry-orange" },
+  vendor_profile: { text: "text-warning-foreground" },
   draft: { text: "text-muted-foreground" },
-  review: { text: "text-foundry-orange" },
-  scheduled: { text: "text-info" },
+  review: { text: "text-warning-foreground" },
+  scheduled: { text: "text-primary" },
   paid: { text: "text-foreground" },
   rejected: { text: "text-destructive" },
   archived: { text: "text-muted-foreground" },
   failed: { text: "text-destructive" },
-  processing: { text: "text-info", pulse: true },
+  processing: { text: "text-primary", pulse: true },
 };
 
 /**
@@ -148,7 +186,7 @@ export function toneClasses(
 /** Banner: light background + border + text for a semantic tone. */
 export function bannerClasses(tone: "accent" | "warning" | "destructive" | "success"): string {
   const c = colorClasses[tone];
-  return cn("rounded-lg border p-3 text-sm", c.borderSubtle, c.bgSubtle, c.text);
+  return cn("rounded-lg border p-3 text-sm", c.borderSubtle, c.bgSubtle, c.softText ?? c.text);
 }
 
 /** Pill/badge: small rounded label with semantic color. */
@@ -160,7 +198,7 @@ export function pillClasses(
   return cn(
     "rounded-full px-2.5 py-0.5 text-[11px] font-semibold tracking-wide",
     c.bgMuted,
-    c.text,
+    c.softText ?? c.text,
   );
 }
 
@@ -170,7 +208,7 @@ export function dotClasses(tone: "success" | "warning" | "destructive" | "info" 
     success: "bg-success",
     warning: "bg-warning",
     destructive: "bg-destructive",
-    info: "bg-info",
+    info: "bg-primary",
     muted: "bg-muted-foreground",
   };
   return cn("size-1.5 rounded-full", map[tone]);
@@ -203,40 +241,36 @@ export function focusRingClasses(tone: "accent" | "success" | "warning" | "destr
     destructive: "focus-visible:ring-destructive/20",
   };
   return map[tone];
-}
-
-/* ══════════════════════════════════════════════════════════════════════
+}/* ══════════════════════════════════════════════════════════════════════
    5. Dark-context colors — for dark surfaces like Dynamic Island
    ══════════════════════════════════════════════════════════════════════
-   These use the same oklch values as the CSS variables but with
-   opacity modifiers suitable for dark (#1c1c1e) backgrounds.
+   These reuse the global semantic tokens so alerts stay consistent everywhere.
 */
-
 export const darkColor = {
   /** Success green at 90% opacity on dark bg */
-  successBg: "bg-[oklch(0.55_0.16_150)]/90",
-  successBgMuted: "bg-[oklch(0.55_0.16_150)]/15",
-  successText: "text-[oklch(0.55_0.16_150)]",
+  successBg: "bg-success/90",
+  successBgMuted: "bg-success/15",
+  successText: "text-success-foreground",
 
   /** Warning amber at various opacities */
-  warningBg: "bg-[oklch(0.75_0.16_70)]",
-  warningBgMuted: "bg-[oklch(0.75_0.16_70)]/15",
-  warningText: "text-[oklch(0.75_0.16_70)]",
+  warningBg: "bg-warning",
+  warningBgMuted: "bg-warning/15",
+  warningText: "text-warning-foreground",
 
   /** Destructive red at various opacities */
-  destructiveBg: "bg-[oklch(0.58_0.25_27)]/90",
-  destructiveBgMuted: "bg-[oklch(0.58_0.25_27)]/15",
-  destructiveRing: "ring-[oklch(0.58_0.25_27)]/30",
-  destructiveText: "text-[oklch(0.58_0.25_27)]",
+  destructiveBg: "bg-destructive/90",
+  destructiveBgMuted: "bg-destructive/15",
+  destructiveRing: "ring-destructive/30",
+  destructiveText: "text-destructive-soft-foreground",
 
   /** Info blue */
-  infoBg: "bg-[oklch(0.55_0.1_250)]",
-  infoBgMuted: "bg-[oklch(0.55_0.1_250)]/15",
-  infoText: "text-[oklch(0.55_0.1_250)]",
+  infoBg: "bg-primary",
+  infoBgMuted: "bg-primary/15",
+  infoText: "text-primary-soft-foreground",
 
   /** Accent on dark */
-  accentBg: "bg-white/15",
-  accentBgActive: "bg-white/20",
+  accentBg: "bg-white/10",
+  accentBgActive: "bg-primary",
   accentRing: "ring-white/10",
   accentText: "text-white",
 

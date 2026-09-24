@@ -9,11 +9,7 @@ import { describe, expect, it } from "bun:test";
 import { extractFieldsFromPages, type PageRead } from "../ocr";
 import type { OcrWord } from "../types";
 
-const page = (n: number, text: string): PageRead => ({
-  pageNumber: n,
-  text,
-  confidence: 0.95,
-});
+const page = (n: number, text: string): PageRead => ({ pageNumber: n, text });
 
 // ---------------------------------------------------------------------------
 // Multi-page profile fields
@@ -278,7 +274,7 @@ function pageWithWords(
   text: string,
   words: OcrWord[],
 ): PageRead {
-  return { pageNumber: n, text, confidence: 0.95, words };
+  return { pageNumber: n, text, words };
 }
 
 describe("profile edge cases: spatial proximity (word coords)", () => {

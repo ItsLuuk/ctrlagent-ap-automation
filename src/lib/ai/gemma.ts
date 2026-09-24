@@ -1,6 +1,14 @@
 import { z } from "zod";
-import { uid, GL_ACCOUNTS, DEPARTMENTS, type ExtractedField, type LineItem } from "../ap/types";
-import type { ExtractedFields } from "../ap/ocr";
+import {
+  uid,
+  GL_ACCOUNTS,
+  DEPARTMENTS,
+  type ExtractedField,
+  type LineItem,
+  type Provenance,
+} from "../ap/types";
+import { collectVatCandidates, resolveSupplierVatNumber } from "../ap/ocr";
+import type { ExtractedFields, VatCandidate } from "../ap/ocr";
 import { moneyToNumber, dueDateFromPaymentTerms, detectPrepaid } from "../ap/zones";
 
 /** Locally-installed vision models, best first. */
@@ -12,7 +20,7 @@ export function imageExtractModelOrder(): string[] {
     const saved = localStorage.getItem("gemma-model");
     if (saved) return [saved];
   } catch {
-    /* non-browser or blocked storage */
+    /* unavailable or blocked local storage */
   }
   return [...VISION_MODELS];
 }
@@ -29,8 +37,8 @@ const OLLAMA_HOSTS = ["http://127.0.0.1:11434", "http://localhost:11434"];
 
 /** Ollama host Foundry speaks the model protocol against. User override
  *  lives in localStorage under `ollama-base`; the default is the standard
- *  localhost origin. This is the #1 support issue: a browser talking to
- *  localhost will not reach an Ollama that only listens on a custom address —
+ *  localhost origin. This is the #1 support issue: the desktop WebView talking
+ *  to localhost will not reach an Ollama that only listens on a custom address —
  *  verify with `curl http://127.0.0.1:11434/api/version` from the same
  *  machine and set the host in Settings → Vision model → Ollama host. */
 export function ollamaBase(): string {
@@ -38,7 +46,7 @@ export function ollamaBase(): string {
     const saved = localStorage.getItem("ollama-base");
     if (saved) return saved;
   } catch {
-    /* non-browser or blocked storage */
+    /* unavailable or blocked local storage */
   }
   return OLLAMA_HOSTS[0]!;
 }
@@ -48,7 +56,7 @@ export function gemmaModel(): string {
     const saved = localStorage.getItem("gemma-model");
     if (saved) return saved;
   } catch {
-    /* non-browser or blocked storage */
+    /* unavailable or blocked local storage */
   }
   return DEFAULT_GEMMA_MODEL;
 }
@@ -200,6 +208,8 @@ export type MergedGemma = {
   vendorEmail: { value: string; page: number } | undefined;
   iban: { value: string; page: number } | undefined;
   vatNumber: { value: string; page: number } | undefined;
+  /** Every valid VAT candidate observed by the VLM, before arbitration. */
+  vatCandidates: VatCandidate[];
   businessRegistrationNumber: { value: string; page: number } | undefined;
   invoiceNumber: { value: string; page: number } | undefined;
   issueDate: { value: string; page: number } | undefined;
@@ -214,10 +224,11 @@ export type MergedGemma = {
   pagesText: string;
 };
 
-/** First non-null value per field wins; line items concatenate across pages.
- *  `pagesText` is the raw OCR text joined across all vision pages — passed
- *  through so `gemmaToFields` can derive the due date from payment terms when
- *  the VLM returned an empty `dueDate`. */
+/** First non-null value per field wins, except VAT which is arbitrated across
+ *  all page candidates using supplier page anchors. Line items concatenate
+ *  across pages. `pagesText` is the raw OCR text joined across all vision pages
+ *  — passed through so `gemmaToFields` can derive the due date from payment
+ *  terms when the VLM returned an empty `dueDate`. */
 export function mergeGemmaPages(
   results: (GemmaPage | null)[],
   pagesText = "",
@@ -228,6 +239,7 @@ export function mergeGemmaPages(
     vendorEmail: undefined,
     iban: undefined,
     vatNumber: undefined,
+    vatCandidates: [],
     businessRegistrationNumber: undefined,
     invoiceNumber: undefined,
     issueDate: undefined,
@@ -247,6 +259,18 @@ export function mergeGemmaPages(
     if (!merged.vendorEmail && r.vendorEmail) merged.vendorEmail = { value: r.vendorEmail, page };
     if (!merged.iban && r.iban) merged.iban = { value: r.iban, page };
     if (!merged.vatNumber && r.vatNumber) merged.vatNumber = { value: r.vatNumber, page };
+    if (r.vatNumber) {
+      const pageCandidates = collectVatCandidates(r.vatNumber).map((candidate) => ({
+        ...candidate,
+        index: (page - 1) * 100000 + candidate.index,
+        page,
+        labelled: true,
+      }));
+      for (const candidate of pageCandidates) {
+        if (!merged.vatCandidates.some((existing) => existing.page === candidate.page && existing.value === candidate.value))
+          merged.vatCandidates.push(candidate);
+      }
+    }
     if (!merged.businessRegistrationNumber && r.businessRegistrationNumber)
       merged.businessRegistrationNumber = { value: r.businessRegistrationNumber, page };
     if (!merged.invoiceNumber && r.invoiceNumber)
@@ -276,6 +300,23 @@ export function mergeGemmaPages(
       });
     }
   });
+  if (merged.vatCandidates.length > 0) {
+    const selected = resolveSupplierVatNumber(merged.vatCandidates, {
+      text: "",
+      vendorEmail: merged.vendorEmail?.value,
+      vendorEmailPage: merged.vendorEmail?.page,
+      vendorIban: merged.iban?.value,
+      vendorIbanPage: merged.iban?.page,
+      businessRegistrationNumber: merged.businessRegistrationNumber?.value,
+      businessRegistrationPage: merged.businessRegistrationNumber?.page,
+    });
+    if (selected) {
+      merged.vatNumber = {
+        value: selected.value,
+        page: selected.page ?? merged.vatNumber?.page ?? 1,
+      };
+    }
+  }
   return { ...merged, pagesText };
 }
 

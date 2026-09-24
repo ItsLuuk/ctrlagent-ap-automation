@@ -13,7 +13,7 @@ import { Route as InvoicesIdRoute } from "../routes/invoices.$id";
 // generated Start tree. createFileRoute("/x") on its own DISCARDS the path
 // (see FileRoute.createRoute in @tanstack/react-router), so without the
 // plugin each route inits as a second __root__ -> "Invariant failed".
-// Mirror routeTree.gen.ts explicitly: id + path + parent, no plugin needed.
+// The desktop route tree is explicit: id + path + parent, with no web router generator.
 const withTree = (route: { update: (opts: never) => never }, id: string, path: string) =>
   route.update({ id, path, getParentRoute: () => tauriRootRoute } as never) as never;
 
@@ -33,7 +33,7 @@ export function getTauriRouter() {
     // be two caches waiting to disagree the day something queries through it.
     context: { queryClient: tauriQueryClient },
     // Hash history: Tauri serves static files (no server rewrite rules),
-    // so browser-history deep links / reloads would blank-screen.
+    // so path-based deep links / reloads would blank-screen.
     history: createHashHistory(),
     scrollRestoration: true,
     defaultPreloadStaleTime: 0,
