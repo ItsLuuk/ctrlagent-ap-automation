@@ -14,6 +14,12 @@ describe("parseLineItemDraft", () => {
     ).toEqual({ ok: true, description: "Bolt", quantity: 1, unitPrice: 2.5, amount: 2.5 });
   });
 
+  it("accepts comma decimal separator in quantity", () => {
+    expect(
+      parseLineItemDraft({ description: "Widget", quantity: "2,5", unitPrice: "4" }),
+    ).toEqual({ ok: true, description: "Widget", quantity: 2.5, unitPrice: 4, amount: 10 });
+  });
+
   it("rejects blank description", () => {
     expect(parseLineItemDraft({ description: "   ", quantity: "1", unitPrice: "5" })).toEqual({
       ok: false,

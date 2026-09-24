@@ -16,7 +16,7 @@ export type ParsedLineItemEdit =
 
 export function parseLineItemDraft(draft: LineItemDraft): ParsedLineItemEdit {
   const description = draft.description.trim();
-  const quantity = Number(draft.quantity);
+  const quantity = Number(draft.quantity.replace(",", "."));
   const unitPrice = Number(draft.unitPrice.replace(",", "."));
   if (!description) return { ok: false };
   if (!Number.isFinite(quantity) || quantity <= 0) return { ok: false };
