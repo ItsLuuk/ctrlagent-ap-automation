@@ -53,3 +53,7 @@ donut-service/venv/
 # Env files (real Supabase secrets) — keep template only
 .env*
 !.env.example
+
+# Isolated worktrees
+.worktrees/
+.superpowers/
