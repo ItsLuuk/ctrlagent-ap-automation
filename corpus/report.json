@@ -1,0 +1,233 @@
+{
+  "runAt": "2026-09-23T21:01:13.240Z",
+  "corpusPath": "C:\\Users\\Luukc\\Documents\\AP Automation\\corpus",
+  "producers": [
+    {
+      "producer": "pdf-lib",
+      "invoiceCount": 1,
+      "scoredCount": 1,
+      "skippedCount": 0,
+      "methodCounts": {
+        "text-layer": 1
+      },
+      "counts": {
+        "correct": 5,
+        "wrong": 3,
+        "missing": 2,
+        "unexpected": 0
+      },
+      "precision": 0.625,
+      "recall": 0.5,
+      "f1": 0.556,
+      "vlmSkipRate": 0,
+      "vlmSkipCount": 0,
+      "failureByField": {
+        "vendor": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "invoiceNumber": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "vendorEmail": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "total": {
+          "missing": 1,
+          "wrong": 0
+        },
+        "lineItems": {
+          "missing": 1,
+          "wrong": 0
+        }
+      },
+      "invoices": [
+        {
+          "file": "test-invoice.pdf",
+          "producer": "pdf-lib (https://github.com/Hopding/pdf-lib)",
+          "creator": "pdf-lib (https://github.com/Hopding/pdf-lib)",
+          "method": "text-layer",
+          "elapsedMs": 22.094299999999976,
+          "skipped": false,
+          "counts": {
+            "correct": 5,
+            "wrong": 3,
+            "missing": 2,
+            "unexpected": 0
+          },
+          "outcomes": {
+            "vendor": "wrong",
+            "invoiceNumber": "wrong",
+            "issueDate": "correct",
+            "dueDate": "correct",
+            "currency": "correct",
+            "iban": "absent",
+            "vatNumber": "absent",
+            "businessRegistrationNumber": "absent",
+            "vendorEmail": "wrong",
+            "address": "absent",
+            "subtotal": "correct",
+            "tax": "correct",
+            "total": "missing",
+            "lineItems": "missing"
+          },
+          "criticalMissing": [
+            "vendor",
+            "invoiceNumber",
+            "total"
+          ],
+          "criticalOk": [
+            "issueDate"
+          ]
+        }
+      ]
+    },
+    {
+      "producer": "telic-reporting",
+      "invoiceCount": 1,
+      "scoredCount": 1,
+      "skippedCount": 0,
+      "methodCounts": {
+        "text-layer": 1
+      },
+      "counts": {
+        "correct": 5,
+        "wrong": 4,
+        "missing": 4,
+        "unexpected": 0
+      },
+      "precision": 0.556,
+      "recall": 0.385,
+      "f1": 0.455,
+      "vlmSkipRate": 0,
+      "vlmSkipCount": 0,
+      "failureByField": {
+        "vendor": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "invoiceNumber": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "businessRegistrationNumber": {
+          "missing": 1,
+          "wrong": 0
+        },
+        "vendorEmail": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "address": {
+          "missing": 0,
+          "wrong": 1
+        },
+        "tax": {
+          "missing": 1,
+          "wrong": 0
+        },
+        "total": {
+          "missing": 1,
+          "wrong": 0
+        },
+        "lineItems": {
+          "missing": 1,
+          "wrong": 0
+        }
+      },
+      "invoices": [
+        {
+          "file": "Superdoos.nl invoice.pdf",
+          "producer": "Telerik Reporting 17.2.23.1114 (https://www.telerik.com/products/reporting.aspx)",
+          "creator": "Telerik Reporting 17.2.23.1114 (https://www.telerik.com/products/reporting.aspx)",
+          "method": "text-layer",
+          "elapsedMs": 37.89390000000003,
+          "skipped": false,
+          "counts": {
+            "correct": 5,
+            "wrong": 4,
+            "missing": 4,
+            "unexpected": 0
+          },
+          "outcomes": {
+            "vendor": "wrong",
+            "invoiceNumber": "wrong",
+            "issueDate": "correct",
+            "dueDate": "absent",
+            "currency": "correct",
+            "iban": "correct",
+            "vatNumber": "correct",
+            "businessRegistrationNumber": "missing",
+            "vendorEmail": "wrong",
+            "address": "wrong",
+            "subtotal": "correct",
+            "tax": "missing",
+            "total": "missing",
+            "lineItems": "missing"
+          },
+          "criticalMissing": [
+            "vendor",
+            "invoiceNumber",
+            "total"
+          ],
+          "criticalOk": [
+            "issueDate"
+          ]
+        }
+      ]
+    }
+  ],
+  "overall": {
+    "counts": {
+      "correct": 10,
+      "wrong": 7,
+      "missing": 6,
+      "unexpected": 0
+    },
+    "precision": 0.588,
+    "recall": 0.435,
+    "f1": 0.5,
+    "vlmSkipRate": 0,
+    "vlmSkipCount": 0,
+    "scoredCount": 2,
+    "methodCounts": {
+      "text-layer": 2
+    },
+    "failureByField": {
+      "vendor": {
+        "missing": 0,
+        "wrong": 2
+      },
+      "invoiceNumber": {
+        "missing": 0,
+        "wrong": 2
+      },
+      "vendorEmail": {
+        "missing": 0,
+        "wrong": 2
+      },
+      "total": {
+        "missing": 2,
+        "wrong": 0
+      },
+      "lineItems": {
+        "missing": 2,
+        "wrong": 0
+      },
+      "businessRegistrationNumber": {
+        "missing": 1,
+        "wrong": 0
+      },
+      "address": {
+        "missing": 0,
+        "wrong": 1
+      },
+      "tax": {
+        "missing": 1,
+        "wrong": 0
+      }
+    }
+  }
+}

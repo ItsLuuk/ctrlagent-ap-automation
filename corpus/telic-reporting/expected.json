@@ -1,0 +1,21 @@
+[
+  {
+    "file": "Superdoos.nl invoice.pdf",
+    "vendor": "Superdoos B.V.",
+    "invoiceNumber": "54773",
+    "issueDate": "2025-01-20",
+    "subtotal": 79.95,
+    "tax": 16.79,
+    "total": 96.74,
+    "currency": "EUR",
+    "iban": "NL95RABO0336381832",
+    "vatNumber": "NL859520572B01",
+    "businessRegistrationNumber": "73408441",
+    "vendorEmail": "klantenservice@superdoos.nl",
+    "address": "de Slof 10G, 5107 RJ Dongen",
+    "lineItems": [
+      { "description": "Brievenbusdoosje A6 160x110x27mm - Bruin", "quantity": 1, "unitPrice": 19.95, "amount": 19.95 },
+      { "description": "Verzendkosten", "quantity": 1, "unitPrice": 60.00, "amount": 60.00 }
+    ]
+  }
+]

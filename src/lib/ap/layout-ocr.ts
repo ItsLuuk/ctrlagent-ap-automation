@@ -1,9 +1,7 @@
 /**
- * Layout-aware OCR. The rework doc is explicit: PaddleOCR (or anything like
- * it) is what unlocks the template path because it returns every word with
- * its bounding box. Tesseract.js gives us the same data via `result.data.words`
- * with `bbox: { x0, y0, x1, y1 }`. We normalize to 0..1 against the image
- * dimensions so the templates we store survive any render size.
+ * Layout-aware word matching. Provides fuzzy anchor-word lookup over OCR word
+ * lists so template specs can find labels even when the exact text differs
+ * slightly from what was stored (OCR noise, casing, etc.).
  */
 import type { OcrWord } from "./types";
 

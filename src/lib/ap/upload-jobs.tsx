@@ -313,7 +313,6 @@ export function useUploadJobs() {
 
 function mapStage(raw: string): ProcessingState["stage"] {
   if (raw.includes("preprocess")) return "preprocessing";
-  if (raw.includes("scanning") || raw.includes("layout")) return "layout ocr";
   if (raw.includes("matching") || raw.includes("template")) return "matching vendor";
   if (raw.includes("AI") || raw.includes("VLM") || raw.includes("ai reading")) {
     return "ai reading";

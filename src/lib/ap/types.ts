@@ -184,7 +184,7 @@ export type DriftInfo = {
   /** Fields the stored template could not read on this invoice. */
   missing: ZoneField[];
   /** How each drifted field's value was recovered. */
-  recoveredBy: Partial<Record<ZoneField, "vlm" | "ocr">>;
+  recoveredBy: Partial<Record<ZoneField, "vlm" | "ocr-fallback">>;
   /** Template version that drifted (for the update-mode diff). */
   templateVersion: number | undefined;
   detectedAt: string;
@@ -220,7 +220,11 @@ export type LearnPayload = {
 export type ProcessingState = {
   /** Job stage label shown in the badge / toast. */
   stage:
-    "queued" | "preprocessing" | "layout ocr" | "matching vendor" | "ai reading" | "finalizing";
+    | "queued"
+    | "preprocessing"
+    | "matching vendor"
+    | "ai reading"
+    | "finalizing";
   /** 0..1 progress within the current stage. */
   progress: number;
   /** True once we've handed off to the background job and the modal is closed. */
@@ -299,13 +303,12 @@ export const ZONE_LABEL: Record<ExtractedField, string> = {
 
 /**
  * User-facing labels for pipeline stages. The extractor emits internal stage
- * names ("layout ocr", "AI reading document", "text extraction"); anything a
- * user can read goes through this map so architecture never leaks into a label.
+ * names; anything a user can read goes through this map so architecture never
+ * leaks into a label.
  */
 export const STAGE_LABEL: Record<string, string> = {
   queued: "Queued",
   preprocessing: "Preparing document",
-  "layout ocr": "Reading page layout",
   "matching vendor": "Matching vendor template",
   "template hit": "Matched a known vendor",
   "ai reading": "Reading document",
@@ -321,10 +324,10 @@ export function stageLabel(stage: string): string {
   return STAGE_LABEL[stage.toLowerCase()] ?? stage;
 }
 
-export type OcrPageMethod = "text-layer" | "ocr" | "none";
+export type OcrPageMethod = "text-layer" | "none";
 
 /** How the document text was obtained overall. */
-export type OcrMethod = "text-layer" | "ocr" | "mixed" | "none";
+export type OcrMethod = "text-layer" | "none";
 
 /** Per-page extraction metadata (text itself lives in the combined `ocrText`). */
 export type OcrPage = {
@@ -368,11 +371,11 @@ export type Invoice = {
   /** Snippet from the document showing the prepaid phrasing, for the approval UI. */
   prepaidPhrase?: string | undefined;
   source: "sample" | "upload";
-  engine?: "gemma" | "ocr" | "template" | undefined;
+  engine?: "gemma" | "template" | undefined;
   /** Template fingerprint the engine matched, when engine === "template". */
   templateFingerprint?: string | undefined;
   /** Per-field trace: which engine produced each value. */
-  fieldPath?: Partial<Record<ExtractedField, "template" | "vlm" | "ocr">> | undefined;
+  fieldPath?: Partial<Record<ExtractedField, "template" | "vlm" | "ocr-fallback">> | undefined;
   /** Cached page payloads used to learn the vendor template. Kept only when
    *  the engine that produced this invoice was VLM or OCR (i.e. novel). */
   learnPayload?: LearnPayload | undefined;
@@ -450,7 +453,7 @@ export const CURRENCY_OPTIONS = [
 
 export const uid = () => Math.random().toString(36).slice(2, 10);
 
-export const money = (value: number, currency = "USD") => {
+export const money = (value: number, currency = "EUR") => {
   const safeCurrency = /^[A-Z]{3}$/.test(currency) ? currency : "EUR";
   return new Intl.NumberFormat("en-US", {
     style: "currency",

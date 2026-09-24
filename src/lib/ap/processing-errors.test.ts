@@ -7,7 +7,7 @@ import {
 
 describe("processing failure communication", () => {
   it("names the user-facing stage", () => {
-    expect(processingStageLabel("layout ocr")).toBe("Reading the page layout");
+    expect(processingStageLabel("preprocessing")).toBe("Preparing the document");
     expect(processingStageLabel("AI reading document")).toBe("Reading invoice fields");
     expect(processingStageLabel("pdf worker startup")).toBe("Starting the PDF reader");
   });

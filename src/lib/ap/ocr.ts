@@ -63,7 +63,7 @@ export type ProcessingSkeleton = ReturnType<typeof buildProcessingSkeleton>;
 import { applyCrossCheck, compareExtractions, disagreements } from "./cross-check";
 import { specToZone, parseLineItemRows } from "./mapping";
 import { embedVendorText, extractVendorBlock, fingerprintOf } from "./fingerprint";
-import { findTemplateMatch } from "./template-store";
+import { findTemplateMatch } from "./vendor-profile-store";
 import { applyTemplateField } from "./template-apply";
 
 export type OcrProgress = {
@@ -1714,7 +1714,7 @@ export function applyDriftReads(args) {
     const read = args.reads[field];
     if (!read) continue;
     fields[field] = read.value;
-    provenance[field] = PROV_VLM;
+    provenance[field] = read.provenance ?? PROV_VLM;
     fieldSources[field] = read.page;
     recoveredBy[field] = args.source;
   }
@@ -2206,48 +2206,34 @@ export async function runBackgroundJob(skeleton, onProgress, onToken, templates,
  * consistent with subtotal + tax / line sums — see reconcileExtraction.
  */
 export function mergeVlmResult(heur, vlmHit) {
-  const prepaidToCarry = vlmHit?.prepaid ?? heur.prepaid;
-  const prepaidPhraseToCarry = vlmHit?.prepaidPhrase ?? heur.prepaidPhrase;
-
-  // Start from the highest-priority reader that has data: text-layer regex.
+  // Fixed priority: text-layer regex wins; VLM only fills gaps.
+  // Provenance is inherited from the heuristic reader; VLM gaps get PROV_VLM.
   const fields = { ...heur.fields };
-  const provenance = {};
+  const provenance = { ...heur.provenance };
   const fieldSources = { ...heur.fieldSources };
 
-  // Carry provenance from the text-layer reader.
-  for (const field of Object.keys(fields)) {
-    provenance[field] = PROV_OCR;
-  }
-
-  // VLM fills gaps only — lower priority than text-layer regex.
   if (vlmHit) {
-    for (const [k, v] of Object.entries(vlmHit.fields)) {
-      const fk = k;
-      if (fields[fk] === undefined || fields[fk] === "" || fields[fk] === 0) {
-        fields[fk] = v;
-        provenance[fk] = PROV_VLM;
-        if (vlmHit.fieldSources[fk] !== undefined) fieldSources[fk] = vlmHit.fieldSources[fk];
+    for (const [field, value] of Object.entries(vlmHit.fields)) {
+      if (fields[field] === undefined || fields[field] === "" || fields[field] === 0) {
+        fields[field] = value;
+        provenance[field] = PROV_VLM;
+        if (vlmHit.fieldSources[field] !== undefined)
+          fieldSources[field] = vlmHit.fieldSources[field];
       }
     }
   }
 
-  // Line items: prefer VLM if it found any, else heuristic.
-  const lineItems = vlmHit && vlmHit.lineItems.length > 0 ? vlmHit.lineItems : heur.lineItems;
-
-  // Currency: prefer VLM if it says something concrete.
-  const currency = vlmHit?.currency ?? heur.currency;
-
   return {
-    path: vlmHit ? "vlm" : "ocr",
+    path: vlmHit ? "vlm" : "ocr-fallback",
     fields,
     provenance,
     fieldSources,
-    lineItems,
-    currency,
+    lineItems: vlmHit && vlmHit.lineItems.length > 0 ? vlmHit.lineItems : heur.lineItems,
+    currency: vlmHit?.currency ?? heur.currency,
     templateFingerprint: undefined,
     model: vlmHit?.model,
-    prepaid: prepaidToCarry,
-    prepaidPhrase: prepaidPhraseToCarry,
+    prepaid: vlmHit?.prepaid ?? heur.prepaid,
+    prepaidPhrase: vlmHit?.prepaidPhrase ?? heur.prepaidPhrase,
   };
 }
 /**
@@ -2375,8 +2361,11 @@ export async function finalizeInvoice(args) {
   const documentText = loaded.pages.map((page) => page.text).join("\n");
   const finalDueDate =
     dueDate || dueDateFromPaymentTerms(documentText, issueDate || undefined) || "";
-  (chosen.fields.vatNumber && String(chosen.fields.vatNumber),
-    findVatNumberIn(documentText, undefined, vendorEmail)?.value);
+  const chosenVatNumber = chosen.fields.vatNumber
+    ? String(chosen.fields.vatNumber)
+    : undefined;
+  const textVatNumber = findVatNumberIn(documentText, undefined, vendorEmail)?.value;
+  const vatNumber = preferAnchoredProfileValue(chosenVatNumber, textVatNumber, vendorEmail) ?? textVatNumber;
   const businessRegistrationNumber = preferAnchoredProfileValue(
     chosen.fields.businessRegistrationNumber
       ? String(chosen.fields.businessRegistrationNumber)
@@ -2496,6 +2485,7 @@ export async function finalizeInvoice(args) {
     ...(address ? { address } : {}),
     ...(vendorEmail ? { vendorEmail } : {}),
     ...(iban ? { iban } : {}),
+    ...(vatNumber ? { vatNumber } : {}),
     ...(businessRegistrationNumber ? { businessRegistrationNumber } : {}),
     status: "draft",
     ...(chosen.templateHold ? { templateHold: true } : {}),
@@ -2506,6 +2496,20 @@ export async function finalizeInvoice(args) {
     memo: "",
     tags: [],
     provenance: finalProvenance,
+    originalExtraction: {
+      vendor,
+      invoiceNumber,
+      issueDate,
+      dueDate: finalDueDate,
+      subtotal,
+      tax,
+      total,
+      ...(address ? { address } : {}),
+      ...(vendorEmail ? { vendorEmail } : {}),
+      ...(iban ? { iban } : {}),
+      ...(vatNumber ? { vatNumber } : {}),
+      ...(businessRegistrationNumber ? { businessRegistrationNumber } : {}),
+    },
     audit: [
       {
         id: uid(),

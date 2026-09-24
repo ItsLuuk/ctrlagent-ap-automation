@@ -13,6 +13,7 @@ import {
   GraduationCap,
   Layers,
   MousePointerClick,
+  Table2,
   Undo2,
 } from "@/components/icons";
 import { toast } from "sonner";
@@ -50,6 +51,7 @@ import { countOf } from "@/lib/ap/vocabulary";
 import type { ProfileField, VendorMaster } from "@/lib/ap/vendor-master";
 import { ReviewHeader } from "./review-header";
 import { VendorProfileCard } from "./vendor-profile-card";
+import { LineItemsList } from "./line-items-list";
 
 /** Stagger between successive extraction beats, ms. */
 const BEAT_MS = 90;
@@ -349,6 +351,22 @@ export function DraftMapper({ invoice, banner }: { invoice: Invoice; banner?: Re
               onEditValue={handleFieldEdit}
               showVendorImprovement={showVendorImprovement || Boolean(invoice.templateDrift)}
               revealBeats={revealBeats}
+            />
+            <LineItemsField
+              invoice={invoice}
+              onChange={(lineItems) => {
+                const saved = updateInvoice(
+                  invoice.id,
+                  { lineItems },
+                  "Corrected line items",
+                  "Line items changed during draft review.",
+                );
+                if (!saved.accepted) {
+                  toast.error(saved.reason ?? "The line items could not be saved.", {
+                    description: "Nothing changed — the invoice is exactly as you left it.",
+                  });
+                }
+              }}
             />
             <ConfirmActions
               vendorName={fields.vendor || invoice.vendor}
@@ -753,6 +771,72 @@ function FieldsPane({
             : `${crossCheck.detail} Flagged for approval.`}
         </p>
       </div>
+
+      {/* Line items summary — visible in the field pane so the processor can see
+          what the cross-check is summing, even though line items are edited in the
+          document pane's LineItemsList, not through drag-to-zone field mapping. */}
+      {invoice.lineItems.length > 0 && (
+        <div className="border-t border-border px-4 py-2.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium text-muted-foreground">Line items</p>
+            <p className="text-xs font-mono text-muted-foreground">
+              {invoice.lineItems.length} item{invoice.lineItems.length !== 1 ? "s" : ""}
+            </p>
+          </div>
+          <div className="mt-1.5 space-y-1 rounded-md border border-border bg-muted/30 px-3 py-2">
+            {invoice.lineItems.map((li) => (
+              <div key={li.id} className="flex items-center justify-between gap-2 text-xs">
+                <span className="truncate">{li.description}</span>
+                <span className="font-mono text-muted-foreground shrink-0">
+                  {li.quantity} × {money(li.unitPrice, invoice.currency)} = {money(li.amount, invoice.currency)}
+                </span>
+              </div>
+            ))}
+            <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-border/60">
+              <span className="text-xs font-medium text-muted-foreground">Lines total</span>
+              <span className={`font-mono text-xs font-semibold ${crossCheck.ok ? "text-foreground" : "text-warning-foreground"}`}>
+                {money(crossCheck.sum, invoice.currency)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LineItemsField({
+  invoice,
+  onChange,
+}: {
+  invoice: Invoice;
+  onChange: (items: Invoice["lineItems"]) => void;
+}) {
+  return (
+    <section
+      aria-labelledby="draft-line-items-title"
+      className="overflow-hidden rounded-lg border border-border bg-card"
+    >
+      <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
+        <div className="flex items-center gap-1.5">
+          <Table2 className="size-3.5 text-muted-foreground" />
+          <p id="draft-line-items-title" className="text-xs font-medium text-muted-foreground">
+            Line items
+          </p>
+        </div>
+        <p className="font-mono text-xs text-muted-foreground">
+          {countOf(invoice.lineItems.length, "item")}
+        </p>
+      </div>
+      <LineItemsList
+        items={invoice.lineItems}
+        currency={invoice.currency}
+        editable
+        onChange={onChange}
+        subtotal={invoice.subtotal}
+        tax={invoice.tax}
+        invoiceTotal={invoice.total}
+      />
     </section>
   );
 }

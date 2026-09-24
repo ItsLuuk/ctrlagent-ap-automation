@@ -138,11 +138,11 @@ function coverage(): Coverage {
       ...(status === "failed"
         ? {
             processing: {
-              stage: "layout ocr" as const,
+              stage: "preprocessing" as const,
               progress: 1,
               background: false,
               error: "The document reader stopped before the fields were read.",
-              errorStage: "layout ocr" as const,
+              errorStage: "preprocessing" as const,
             },
           }
         : {}),

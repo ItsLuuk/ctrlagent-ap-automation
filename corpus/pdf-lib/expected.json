@@ -1,0 +1,18 @@
+[
+  {
+    "file": "test-invoice.pdf",
+    "vendor": "ACME Cloud Services BV",
+    "invoiceNumber": "INV-9001",
+    "issueDate": "2026-09-01",
+    "dueDate": "2026-10-01",
+    "subtotal": 1218.00,
+    "tax": 255.78,
+    "total": 1473.78,
+    "currency": "EUR",
+    "vendorEmail": "billing@acmecloud.example",
+    "lineItems": [
+      { "description": "Cloud hosting", "quantity": 12, "unitPrice": 89.00, "amount": 1068.00 },
+      { "description": "Support plan", "quantity": 1, "unitPrice": 150.00, "amount": 150.00 }
+    ]
+  }
+]

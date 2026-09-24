@@ -10,8 +10,48 @@
  * 4. Concatenate, optionally apply the regex, normalize to the field type.
  */
 import type { AnchorSpec, OcrWord, ZoneField } from "./types";
-import { nearestWord } from "./layout-ocr";
 import { moneyToNumber, parseDateParts } from "./zones";
+
+function clamp01(v: number): number {
+  return Math.max(0, Math.min(1, v));
+}
+
+/** Cheap string-distance match for finding an anchor word in the OCR stream. */
+function nearestWord(words: OcrWord[], query: string): OcrWord | undefined {
+  const needle = query.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  if (!needle) return undefined;
+  let best: { word: OcrWord; score: number } | undefined;
+  for (const w of words) {
+    const hay = w.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+    if (!hay) continue;
+    const score = sharedCharScore(needle, hay);
+    if (best === undefined || score > best.score) best = { word: w, score };
+  }
+  // Threshold — reject anything below 0.45 similarity.
+  return best && best.score >= 0.45 ? best.word : undefined;
+}
+
+/** Bigram-style overlap; fast and tolerant of OCR typos. */
+function sharedCharScore(a: string, b: string): number {
+  const longer = a.length >= b.length ? a : b;
+  const shorter = a.length >= b.length ? b : a;
+  if (!longer.length) return 0;
+  // Substring containment is worth a lot for short anchors like "datum".
+  if (longer.includes(shorter)) return shorter.length / longer.length;
+  let matches = 0;
+  const used = new Set<number>();
+  for (let i = 0; i < shorter.length; i++) {
+    for (let j = 0; j < longer.length; j++) {
+      if (used.has(j)) continue;
+      if (shorter[i] === longer[j]) {
+        matches++;
+        used.add(j);
+        break;
+      }
+    }
+  }
+  return matches / longer.length;
+}
 
 export type ApplyResult = { value: string | number; confidence: number } | undefined;
 

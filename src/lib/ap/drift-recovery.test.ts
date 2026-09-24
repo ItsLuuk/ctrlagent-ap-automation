@@ -70,6 +70,31 @@ describe("applyDriftReads", () => {
     expect(merged.stillMissing).toEqual([]);
   });
 
+  it("preserves template provenance while recording recovered provenance", () => {
+    const merged = applyDriftReads({
+      fields: { vendor: "Northwind Services B.V.", subtotal: 1000 },
+      provenance: { vendor: "exact", subtotal: "derived" },
+      fieldSources: { vendor: 1, subtotal: 1 },
+      missing: ["invoiceNumber", "total"],
+      reads: {
+        invoiceNumber: { value: "NW-20481", provenance: "read", page: 1 },
+        total: { value: 1210, provenance: "derived", page: 1 },
+      },
+      source: "ocr-fallback",
+    });
+
+    expect(merged.provenance).toEqual({
+      vendor: "exact",
+      subtotal: "derived",
+      invoiceNumber: "read",
+      total: "derived",
+    });
+    expect(merged.recoveredBy).toEqual({
+      invoiceNumber: "ocr-fallback",
+      total: "ocr-fallback",
+    });
+  });
+
   it("leaves fields with no read missing for the next reader", () => {
     const merged = applyDriftReads({
       ...base,

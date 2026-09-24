@@ -5,9 +5,6 @@ export function processingStageLabel(stage: string | undefined): string {
   const value = stage?.toLowerCase() ?? "";
   if (value.includes("upload")) return "Opening the uploaded file";
   if (value.includes("preprocess")) return "Preparing the document";
-  if (value.includes("scanning") || value.includes("layout")) {
-    return "Reading the page layout";
-  }
   if (value.includes("matching") || value.includes("template")) {
     return "Matching the vendor template";
   }
@@ -80,7 +77,6 @@ export function processingFailureState(
 export function stageToProcessingState(stage: string | undefined): ProcessingState["stage"] {
   const value = stage?.toLowerCase() ?? "";
   if (value.includes("preprocess")) return "preprocessing";
-  if (value.includes("scanning") || value.includes("layout")) return "layout ocr";
   if (value.includes("matching") || value.includes("template")) return "matching vendor";
   if (value.includes("ai") || value.includes("vlm")) return "ai reading";
   if (value.includes("final")) return "finalizing";

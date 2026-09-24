@@ -195,7 +195,7 @@ function normalizeText(s: string): string {
   return s.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-/** True when the AI value and the Tesseract crop text agree for this field type. */
+/** True when the AI value and the field-region read agree for this field type. */
 export function compareZoneValue(field: ZoneField, ai: unknown, ocrText: string): boolean {
   const text = ocrText.trim();
   if (field === "subtotal" || field === "tax" || field === "total") {

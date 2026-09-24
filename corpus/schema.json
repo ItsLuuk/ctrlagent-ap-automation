@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Golden-corpus invoice ground truth",
+  "description": "One file per producer folder. An array of objects, one per PDF in that folder, keyed by filename. The corpus runner validates each entry against this schema and against the extracted fields. The schema is the contract; fixtures that fail are real extraction misses, not bugs in the fixture.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["file"],
+    "properties": {
+      "file": {
+        "type": "string",
+        "description": "PDF filename in this producer folder. Must end with .pdf and be unique within the folder."
+      },
+      "_skip": {
+        "type": "boolean",
+        "description": "When true the runner logs the invoice as SKIPPED and does not score it. Use only for corrupt / image-only / XFA-only PDFs that cannot be read at all — never to silently paper over a real extraction miss. File a ticket for every _skip."
+      },
+      "_reason": {
+        "type": "string",
+        "description": "Why this invoice is skipped. Required when _skip is true."
+      },
+      "vendor": { "type": "string" },
+      "invoiceNumber": { "type": "string" },
+      "issueDate": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+      "dueDate": { "type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$" },
+      "subtotal": { "type": "number" },
+      "tax": { "type": "number" },
+      "total": { "type": "number" },
+      "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+      "iban": { "type": "string" },
+      "vatNumber": { "type": "string" },
+      "businessRegistrationNumber": { "type": "string" },
+      "vendorEmail": { "type": "string", "format": "email" },
+      "address": { "type": "string" },
+      "lineItems": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "required": ["description", "amount"],
+          "properties": {
+            "description": { "type": "string", "minLength": 1 },
+            "quantity": { "type": "number" },
+            "unitPrice": { "type": "number" },
+            "amount": { "type": "number" }
+          },
+          "additionalProperties": false
+        },
+        "description": "Line items are order-insensitive: matching is by description + amount (cents tolerance), with quantity/unitPrice checked to cents where both are given."
+      }
+    },
+    "additionalProperties": false,
+    "description": "Fields not present on a given invoice are omitted (not nulled). The runner only asserts on fields that appear here."
+  },
+  "minItems": 1,
+  "uniqueItems": true
+}

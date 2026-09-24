@@ -23,10 +23,15 @@ import {
   type ZoneMap,
 } from "./types";
 import {
-  upsertTemplate as persistTemplate,
+  autoLearnProfile,
+  confirmProfile,
+  clearProfiles,
   clearTemplates,
+  findTemplateMatch,
+  readAllProfiles,
   readAllTemplates,
-} from "./template-store";
+  upsertTemplate as persistTemplate,
+} from "./vendor-profile-store";
 import { buildTemplateFromInvoice } from "./ocr";
 import { validateInvoiceForConfirmation } from "./mapping";
 import { fingerprintOf, embedVendorText } from "./fingerprint";
