@@ -15,6 +15,7 @@ import { cn } from "@/lib/utils";
 import { uid, money, type LineItem, GL_ACCOUNTS, DEPARTMENTS } from "@/lib/ap/types";
 import { colorClasses } from "@/lib/colors";
 import { EmptyState } from "@/components/ap/primitives";
+import { parseLineItemDraft, type LineItemDraft } from "@/lib/ap/line-item-edit";
 
 /* ── Shared editable field cells ────────────────────────────────────── */
 
@@ -159,6 +160,74 @@ function DisplayRow({
   );
 }
 
+/* ── Editable row (committed item) ──────────────────────────────────── */
+
+function EditableRow({
+  item,
+  currency,
+  onCommit,
+  onDelete,
+  isLast,
+}: {
+  item: LineItem;
+  currency: string;
+  onCommit: (next: LineItem) => void;
+  onDelete: () => void;
+  isLast: boolean;
+}) {
+  // Local string drafts so in-progress input like "1." or "2," survives
+  // re-render; keyed by item.id at the call site (remounts on id change).
+  const [description, setDescription] = useState(item.description);
+  const [quantity, setQuantity] = useState(String(item.quantity));
+  const [unitPrice, setUnitPrice] = useState(String(item.unitPrice));
+
+  const commit = useCallback(
+    (draft: LineItemDraft) => {
+      const parsed = parseLineItemDraft(draft);
+      if (!parsed.ok) return; // invalid → local input keeps typed text, no upstream write
+      onCommit({ ...item, ...parsed });
+    },
+    [item, onCommit],
+  );
+
+  const deleteButton = (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        onDelete();
+      }}
+      className="justify-self-end rounded-sm p-1 text-muted-foreground/0 transition-colors ease-out-expo hover:bg-destructive/10 hover:text-destructive group-hover:text-muted-foreground"
+      aria-label={`Remove ${description || item.description}`}
+    >
+      <X className="size-3.5" />
+    </button>
+  );
+
+  return (
+    <RowFields
+      description={description}
+      quantity={quantity}
+      unitPrice={unitPrice}
+      currency={currency}
+      onDescriptionChange={(v) => {
+        setDescription(v);
+        commit({ description: v, quantity, unitPrice });
+      }}
+      onQuantityChange={(v) => {
+        setQuantity(v);
+        commit({ description, quantity: v, unitPrice });
+      }}
+      onUnitPriceChange={(v) => {
+        setUnitPrice(v);
+        commit({ description, quantity, unitPrice: v });
+      }}
+      isLast={isLast}
+      deleteButton={deleteButton}
+    />
+  );
+}
+
 /* ── Column header ─────────────────────────────────────────────────── */
 
 function ColumnHeader() {
@@ -248,6 +317,14 @@ export function LineItemsList({
     [items, onChange],
   );
 
+  const handleCommitRow = useCallback(
+    (id: string, next: LineItem) => {
+      if (!onChange) return;
+      onChange(items.map((li) => (li.id === id ? { ...li, ...next } : li)));
+    },
+    [items, onChange],
+  );
+
   const isEmpty = items.length === 0 && !adding;
 
   return (
@@ -276,16 +353,27 @@ export function LineItemsList({
         </EmptyState>
       ) : (
         <>
-          {items.map((item, index) => (
-            <DisplayRow
-              key={item.id}
-              item={item}
-              currency={currency}
-              editable={editable}
-              onDelete={() => handleDelete(item.id)}
-              isLast={!adding && index === items.length - 1}
-            />
-          ))}
+          {items.map((item, index) =>
+            editable && onChange ? (
+              <EditableRow
+                key={item.id}
+                item={item}
+                currency={currency}
+                onCommit={(next) => handleCommitRow(item.id, next)}
+                onDelete={() => handleDelete(item.id)}
+                isLast={!adding && index === items.length - 1}
+              />
+            ) : (
+              <DisplayRow
+                key={item.id}
+                item={item}
+                currency={currency}
+                editable={editable}
+                onDelete={() => handleDelete(item.id)}
+                isLast={!adding && index === items.length - 1}
+              />
+            ),
+          )}
 
           {/* New row being added */}
           {adding && (
