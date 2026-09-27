@@ -89,4 +89,52 @@ describe("VAT candidate collector", () => {
 
     expect(candidates.map((candidate) => candidate.value)).toEqual(["NL987654321B01"]);
   });
+
+  it("recovers the supplier VAT on a footer-less invoice with no anchor at all", () => {
+    // No footer, no "supplier|leverancier" line, no vendor email/IBAN/KvK in
+    // the text: the anchored path has nothing to work with. The label the
+    // value sits next to is the only evidence left, and it is enough.
+    const text = [
+      "Factuur 2026-0042",
+      "Klant: Customer Ltd",
+      "BTW-nummer: NL123456789B01",
+      "Totaal: EUR 1.234,56",
+    ].join("\n");
+
+    expect(resolveSupplierVatNumber(collectVatCandidates(text), { text })?.value).toBe(
+      "NL123456789B01",
+    );
+  });
+
+  it("takes a labelled VAT above the bill-to block as the supplier's own", () => {
+    // Header VAT first, customer block below it: the number predates the
+    // bill-to framing, so it is the issuing party's — not the customer's.
+    const text = ["BTW: NL123456789B01", "Bill to: Customer Ltd", "Totaal: EUR 100,00"].join("\n");
+
+    expect(resolveSupplierVatNumber(collectVatCandidates(text), { text })?.value).toBe(
+      "NL123456789B01",
+    );
+  });
+
+  it("stays conservative when no label is close enough to own the number", () => {
+    const unlabelled = [
+      "Factuur 2026-0042",
+      "NL123456789B01",
+      "Totaal: EUR 100,00",
+    ].join("\n");
+    expect(resolveSupplierVatNumber(collectVatCandidates(unlabelled), { text: unlabelled })).toBe(
+      undefined,
+    );
+
+    // The only label in the text is far above the number: too far to be the
+    // label that names it, so ownership is unknowable and the answer stays no.
+    const distant = [
+      "BTW: onze vermelding staat los van het nummer hieronder",
+      "Een lange toelichting over de factuur die het label en het nummer uit elkaar drijft.",
+      "NL123456789B01",
+    ].join("\n");
+    expect(resolveSupplierVatNumber(collectVatCandidates(distant), { text: distant })).toBe(
+      undefined,
+    );
+  });
 });

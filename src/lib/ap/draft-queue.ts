@@ -30,6 +30,7 @@ export const PROFILE_GAP_LABEL: Record<ProfileField, string> = {
   // The country table decides the real label (see `gapLabel`); this is only the
   // fallback for a vendor whose identifiers do not name a country.
   businessRegistrationNumber: BUSINESS_REGISTRATION_LABEL_FALLBACK,
+  department: "Department",
 };
 
 /**
@@ -66,6 +67,9 @@ export function buildQueue(args: {
   amberFields: Array<{ field: ExtractedField; label: string }>;
   crossCheckOk: boolean;
   crossCheckDetail?: string | undefined;
+  /** Mirrors the validation scope: "blocking" in approve, "warning" in confirm,
+   *  "none" to suppress (e.g. when the discrepancy is a known discount). */
+  crossCheckKind?: "blocking" | "warning" | "none";
   vendor: VendorMaster;
 }): QueueItem[] {
   const items: QueueItem[] = [];
@@ -85,10 +89,15 @@ export function buildQueue(args: {
 
   for (const issue of args.blockingIssues) pushIssue("blocking", issue);
 
-  if (!args.crossCheckOk && !covered.has("field:total")) {
+  if (
+    !args.crossCheckOk &&
+    !covered.has("field:total") &&
+    args.crossCheckKind !== "none"
+  ) {
+    const crossCheckKind = args.crossCheckKind ?? "blocking";
     items.push({
-      key: "blocking:cross-check",
-      kind: "blocking",
+      key: `${crossCheckKind}:cross-check`,
+      kind: crossCheckKind,
       field: "total",
       label: "total",
       message: args.crossCheckDetail ?? "Line items do not add up to the total.",
@@ -106,7 +115,7 @@ export function buildQueue(args: {
       kind: "amber",
       field,
       label,
-      message: "Check this value against the document.",
+      message: "Read with low confidence — check against the document.",
     });
   }
 

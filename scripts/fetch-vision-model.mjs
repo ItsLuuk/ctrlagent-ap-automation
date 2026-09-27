@@ -263,7 +263,7 @@ async function main() {
   }
 
   log("");
-  log("next: `bun run bootstrap:tauri` / `bun run tauri:build` ships both directories via bundle.resources.");
+  log("next: `npm run tauri:dev` / `tauri build` ships both directories via bundle.resources.");
 }
 
 main().catch((error) => fail(error instanceof Error ? error.message : String(error)));

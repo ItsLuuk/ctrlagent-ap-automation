@@ -1,13 +1,172 @@
-<!DOCTYPE html>
-<html lang="en" class="dark" data-theme="dark">
+<!doctype html>
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Foundry</title>
     <link rel="icon" href="./favicon.ico" />
+    <!-- The splash paints before the bundle arrives, so the wordmark needs its
+         weight in flight or it sets once in the fallback face (Branding/foundry.md
+         §4: one family everywhere). Same family/URL the app stylesheet uses. -->
+    <link
+      rel="preload"
+      href="./fonts/Inter-SemiBold.woff2"
+      as="font"
+      type="font/woff2"
+      crossorigin
+    />
   </head>
   <body>
     <div id="root"></div>
+    <!--
+      The startup loading animation. Hand-written because Tailwind only exists
+      once the module bundle has parsed, which is the whole window this covers.
+
+      Read order (Branding/design/principles.md "set the reading order before
+      styling it"): the wordmark says what opened, the status line says what is
+      happening, the pulse is the only thing that moves. Three text ranks, one
+      vertical stack, no peers on a shared line.
+
+      Deliberately not a determinate bar: startup is not measurable yet
+      (docs/DESIGN.md "Phase 8", priority 1 is still to instrument the Tauri
+      path), and a bar that sweeps implies a percentage we cannot report. A
+      bar that breathes in place says "working" and nothing more — the same
+      `animate-pulse` in-progress connector the pipeline uses
+      (Branding/foundry.md §4: nothing else moves).
+
+      Every value below is a token from src/styles.css, copied as literals
+      because this block is the only CSS on screen at this point.
+    -->
+    <div id="boot-splash" role="status" aria-live="polite">
+      <div class="boot-card">
+        <p class="boot-title">Foundry</p>
+        <p class="boot-status">Starting your workspace…</p>
+        <div class="boot-track" aria-hidden="true"><span class="boot-fill"></span></div>
+      </div>
+    </div>
+    <style>
+      /* Light gallery only — styles.css ships one surface. `color-scheme` has to
+         agree with it or the webview paints dark native chrome under a light
+         canvas for the length of the boot. */
+      :root {
+        color-scheme: light;
+      }
+      body {
+        margin: 0;
+        background: #f5f5f5; /* --background */
+      }
+      #boot-splash {
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        display: grid;
+        place-content: center;
+        background: #f5f5f5; /* --background, so window -> splash -> app is one surface */
+        color: #1d1d1f; /* --foreground */
+        font-family: "Inter", ui-sans-serif, system-ui, sans-serif; /* --font-sans */
+        transition: opacity 220ms ease;
+      }
+      /* The app's own card: rounded-lg (--radius 1rem), --card, --shadow-whisper.
+         A new box here would be a new pattern (Branding/foundry.md §5). */
+      .boot-card {
+        box-sizing: border-box;
+        width: 264px;
+        padding: 20px; /* p-5, the roomy card body */
+        border-radius: 16px;
+        background: #ffffff; /* --card */
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.04),
+          0 1px 1px 0.5px rgba(0, 0, 0, 0.02),
+          0 3px 3px 1.5px rgba(0, 0, 0, 0.02),
+          0 6px 6px -3px rgba(0, 0, 0, 0.02),
+          0 12px 12px -6px rgba(0, 0, 0, 0.02),
+          0 24px 24px -12px rgba(0, 0, 0, 0.02); /* --shadow-whisper */
+      }
+      /* Card-title rank, semibold wordmark (Branding/foundry.md §1: the logo is
+         the wordmark; there is no icon lockup). */
+      .boot-title {
+        margin: 0;
+        font-size: 19px;
+        font-weight: 600;
+        letter-spacing: -0.025em; /* --tracking-tight */
+        color: #1d1d1f; /* --foreground */
+      }
+      /* Supporting text sits directly below the primary, never beside it. */
+      .boot-status {
+        margin: 8px 0 0; /* mt-2 */
+        min-height: 1.25rem; /* the failure sentence is longer; hold the card still */
+        font-size: 14px; /* text-sm */
+        line-height: 1.25rem;
+        color: #71717a; /* --muted-foreground */
+      }
+      .boot-track {
+        margin-top: 16px; /* mt-4 */
+        height: 3px;
+        overflow: hidden;
+        border-radius: 999px;
+        background: #d2d2d7; /* --border */
+      }
+      /* Ink, not the accent wash: `--accent` is documented "a light-blue
+         highlight wash, never a fill" (Branding/foundry.md §6), and
+         `--primary` is rationed to the one filled CTA and the focus ring. Ink
+         is achromatic, so a bar this prominent cannot break the rule that
+         colour is rationed — and its meaning is the status line, never the
+         colour itself. It rests below full black so the breathing stays in the
+         calm register instead of flashing to solid. */
+      .boot-fill {
+        display: block;
+        width: 50%;
+        height: 100%;
+        border-radius: inherit;
+        background: #1d1d1f; /* --foreground */
+        animation: boot-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+      }
+      /* Tailwind's `pulse`, restated with a lower floor so the bar is legible
+         at its dimmest: the splash cannot borrow the utility. */
+      @keyframes boot-pulse {
+        0%,
+        100% {
+          opacity: 0.85;
+        }
+        50% {
+          opacity: 0.35;
+        }
+      }
+      /* A failed boot says so in words, and stops moving — the status line and
+         the still bar carry it, so red is never the only signal
+         (Branding/accessibility.md §1, §4). */
+      #boot-splash[data-state="error"] .boot-status {
+        color: #d92d20; /* --destructive */
+      }
+      #boot-splash[data-state="error"] .boot-fill {
+        animation: none;
+      }
+      /* Reduced motion drops the loop and keeps the surface. The status line is
+         what carries the meaning, so nothing is lost by standing still. */
+      @media (prefers-reduced-motion: reduce) {
+        .boot-fill {
+          animation: none;
+        }
+      }
+    </style>
+    <script>
+      // Keep a human-readable fallback alive if the module fails before React
+      // can mount — a blank window is indistinguishable from a dead app.
+      window.addEventListener("error", function () {
+        var splash = document.getElementById("boot-splash");
+        if (!splash || !splash.isConnected) return;
+        splash.dataset.state = "error";
+        var status = splash.querySelector(".boot-status");
+        if (status) status.textContent = "Foundry could not start. Try opening it again.";
+      });
+      window.addEventListener("unhandledrejection", function () {
+        var splash = document.getElementById("boot-splash");
+        if (!splash || !splash.isConnected) return;
+        splash.dataset.state = "error";
+        var status = splash.querySelector(".boot-status");
+        if (status) status.textContent = "Foundry could not start. Try opening it again.";
+      });
+    </script>
     <script type="module" src="./src/tauri-main.tsx"></script>
   </body>
 </html>

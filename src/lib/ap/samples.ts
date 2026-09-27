@@ -1,4 +1,5 @@
 import type { Invoice } from "./types";
+import type { PurchaseOrder } from "./purchase-order";
 
 const day = (offset: number) => {
   const d = new Date(2026, 8, 18);
@@ -44,14 +45,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Engineering",
         },
       ],
-      provenance: {
-        vendor: "read",
-        invoiceNumber: "read",
-        issueDate: "read",
-        dueDate: "read",
-        subtotal: "read",
-        tax: "read",
-        total: "read",
+      confidence: {
+        vendor: 0.98,
+        invoiceNumber: 0.96,
+        issueDate: 0.93,
+        dueDate: 0.72,
+        subtotal: 0.97,
+        tax: 0.68,
+        total: 0.99,
       },
       audit: [
         {
@@ -105,14 +106,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Marketing",
         },
       ],
-      provenance: {
-        vendor: "read",
-        invoiceNumber: "read",
-        issueDate: "read",
-        dueDate: "read",
-        subtotal: "read",
-        tax: "read",
-        total: "read",
+      confidence: {
+        vendor: 0.94,
+        invoiceNumber: 0.88,
+        issueDate: 0.91,
+        dueDate: 0.55,
+        subtotal: 0.95,
+        tax: 0.59,
+        total: 0.96,
       },
       audit: [
         {
@@ -151,14 +152,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Finance",
         },
       ],
-      provenance: {
-        vendor: "read",
-        invoiceNumber: "read",
-        issueDate: "read",
-        dueDate: "read",
-        subtotal: "read",
-        tax: "read",
-        total: "read",
+      confidence: {
+        vendor: 0.99,
+        invoiceNumber: 0.97,
+        issueDate: 0.95,
+        dueDate: 0.9,
+        subtotal: 0.98,
+        tax: 0.99,
+        total: 0.99,
       },
       audit: [
         {
@@ -219,14 +220,14 @@ export function sampleInvoices(): Invoice[] {
           department: "Operations",
         },
       ],
-      provenance: {
-        vendor: "read",
-        invoiceNumber: "read",
-        issueDate: "read",
-        dueDate: "read",
-        subtotal: "read",
-        tax: "read",
-        total: "read",
+      confidence: {
+        vendor: 0.96,
+        invoiceNumber: 0.92,
+        issueDate: 0.9,
+        dueDate: 0.87,
+        subtotal: 0.94,
+        tax: 0.82,
+        total: 0.97,
       },
       audit: [
         {
@@ -292,14 +293,14 @@ export function sampleHistory(): Invoice[] {
           department: "Operations",
         },
       ],
-      provenance: {
-        vendor: "read",
-        invoiceNumber: "read",
-        issueDate: "read",
-        dueDate: "read",
-        subtotal: "read",
-        tax: "read",
-        total: "read",
+      confidence: {
+        vendor: 0.97,
+        invoiceNumber: 0.95,
+        issueDate: 0.94,
+        dueDate: 0.93,
+        subtotal: 0.96,
+        tax: 0.9,
+        total: 0.98,
       },
       audit: [
         {
@@ -331,6 +332,55 @@ export function sampleHistory(): Invoice[] {
       ],
       source: "sample",
       createdAt: day(-40),
+    },
+  ];
+}
+
+/** The demo POs the sample invoices match against — same opt-in as the rest. */
+export function samplePos(): PurchaseOrder[] {
+  return [
+    {
+      id: "po-northwind-1",
+      number: "PO-4471",
+      vendor: "Northwind Cloud Systems",
+      currency: "USD",
+      issueDate: "2026-08-28",
+      status: "open",
+      lines: [
+        {
+          id: "pol-1",
+          description: "Compute cluster — annual commitment",
+          quantity: 1,
+          unitPrice: 14200,
+          amount: 14200,
+        },
+        {
+          id: "pol-2",
+          description: "Observability add-on (12 mo)",
+          quantity: 12,
+          unitPrice: 350,
+          amount: 4200,
+        },
+      ],
+      receipts: [{ poLineId: "pol-2", quantityReceived: 12 }],
+    },
+    {
+      id: "po-acme-1",
+      number: "PO-4488",
+      vendor: "Acme Corp",
+      currency: "USD",
+      issueDate: "2026-09-01",
+      status: "open",
+      lines: [
+        {
+          id: "pol-3",
+          description: "Widget pack",
+          quantity: 10,
+          unitPrice: 80,
+          amount: 800,
+        },
+      ],
+      receipts: [{ poLineId: "pol-3", quantityReceived: 10 }],
     },
   ];
 }

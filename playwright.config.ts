@@ -14,7 +14,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   webServer: {
-    command: "bun run dev:vite",
+    command: "bun run dev:tauri",
     url: "http://127.0.0.1:5173/tauri.html",
     reuseExistingServer: true,
     timeout: 30_000,

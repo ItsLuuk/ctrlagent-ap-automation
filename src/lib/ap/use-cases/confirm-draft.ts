@@ -7,8 +7,9 @@
  * this module owns the decision and the persistence order.
  */
 import {
-  ZONE_FIELDS,
+  MAPPING_FIELDS,
   type AnchorSpec,
+  type DraftFields,
   type Invoice,
   type LineItemsSpec,
   type OcrWord,
@@ -17,31 +18,22 @@ import {
   type ZoneMap,
 } from "../types";
 import { buildAnchorSpec, validateInvoiceForConfirmation } from "../mapping";
+import {
+  CRITICAL_MAPPING_FIELDS,
+  TEMPLATE_TRAINING_WHEELS,
+  unconfirmedCriticalFields,
+  type ConfirmedMappings,
+  type DraftAssignments,
+} from "../mapping-proposals";
 import type { Actor, TransitionId, TransitionOutcome } from "../state-machine";
-import type { VendorMaster } from "../vendor-master";
+import type { InvoiceStatus } from "../types";
+import { vendorProfileFromMapping, type VendorMaster } from "../vendor-master";
 
-export type DraftAssignment = {
-  field: ZoneField;
-  zone: { x: number; y: number; w: number; h: number };
-  anchor?: string | undefined;
-};
-export type DraftAssignments = Record<ZoneField, DraftAssignment | undefined>;
-
-/** The editable scalar fields shared by the draft hook and confirmation use case. */
-export type DraftFields = {
-  vendor: string;
-  invoiceNumber: string;
-  issueDate: string;
-  dueDate: string;
-  subtotal: string;
-  tax: string;
-  total: string;
-  address: string;
-  vendorEmail: string;
-  iban: string;
-  vatNumber: string;
-  businessRegistrationNumber: string;
-};
+// The draft vocabulary is domain-owned now: assignments and confirmations live
+// beside the proposals they refer to, draft values live on `Invoice`. Both are
+// re-exported so existing importers keep a single import site.
+export type { ConfirmedMappings, DraftAssignment, DraftAssignments } from "../mapping-proposals";
+export type { DraftFields } from "../types";
 
 export type SaveVendorTemplateInput = {
   vendor: string;
@@ -67,7 +59,9 @@ export type DraftPersistencePorts = {
     input: { transition: TransitionId; actor: Actor; note?: string },
   ) => TransitionOutcome;
   confirmTemplateExtraction: (vendor: string) => void;
-  upsertVendor: (vendor: VendorMaster) => void;
+  /** Writes the vendor record. A refused write (a bank detail awaiting a
+   *  second signature) is answered, not swallowed — the confirm stops. */
+  upsertVendor: (vendor: VendorMaster) => TransitionOutcome;
 };
 
 export type ConfirmDraftRequest = {
@@ -76,6 +70,8 @@ export type ConfirmDraftRequest = {
   assignments: DraftAssignments;
   words: OcrWord[];
   existingTemplate?: VendorTemplate | undefined;
+  /** Explicit acceptance for proposed regions; critical fields default to unconfirmed. */
+  confirmedMappings?: Partial<Record<ZoneField, boolean>> | undefined;
   profile?: VendorMaster | undefined;
   profileUpdatedAt?: string | undefined;
   learnedCount?: number | undefined;
@@ -101,16 +97,36 @@ export type ConfirmDraftResult =
       learnedCount: number;
     };
 
+/**
+ * Which confirm transition a confirmation uses, by the stage the operator is
+ * standing in. The mapper runs in Profiling (a first-time vendor: identity and
+ * fields pinned in one pass) and in Draft (a known vendor), and the state
+ * machine only allows a confirm from each of those places under its own id.
+ * Domain policy, so it lives beside the confirm rather than in the screen.
+ */
+export function confirmTransitionFor(status: InvoiceStatus): TransitionId {
+  return status === "vendor_profile" ? "confirm-from-profiling" : "confirm";
+}
+
 /** Builds stable anchor specs and raw zones from the current draft assignments. */
 export function buildDraftAnchorSpecs(
   words: OcrWord[],
   assignments: DraftAssignments,
+  confirmedMappings: Partial<Record<ZoneField, boolean>> = {},
 ): { specs: Partial<Record<ZoneField, AnchorSpec>>; zones: ZoneMap } {
   const specs: Partial<Record<ZoneField, AnchorSpec>> = {};
   const zones: ZoneMap = {};
-  for (const field of ZONE_FIELDS) {
+  for (const field of MAPPING_FIELDS) {
     const assignment = assignments[field];
     if (!assignment) continue;
+    if (
+      CRITICAL_MAPPING_FIELDS.includes(field) &&
+      assignment.proposal &&
+      assignment.proposal.source !== "saved" &&
+      !confirmedMappings[field]
+    ) {
+      continue;
+    }
     specs[field] = buildAnchorSpec(words, field, assignment.zone, assignment.anchor);
     zones[field] = assignment.zone;
   }
@@ -133,13 +149,23 @@ export function draftFieldsToInvoicePatch(fields: DraftFields): Partial<Invoice>
 /**
  * Confirms a draft in the same order as the screen: persist field values and
  * learned mappings, release any template training hold, then apply the state
- * transition. A rejected transition is returned to the adapter for its toast.
+ * transition. Which transition that is depends on the stage the invoice is in
+ * (see `confirmTransitionFor`). A rejected transition is returned to the
+ * adapter for its toast.
  */
 export function confirmDraft(
   request: ConfirmDraftRequest,
   ports: DraftPersistencePorts,
 ): ConfirmDraftResult {
-  const { invoice, fields, assignments, words, existingTemplate } = request;
+  const { invoice, fields, assignments, words, existingTemplate, confirmedMappings = {} } = request;
+  const critical = unconfirmedCriticalFields(assignments, confirmedMappings);
+  if (critical.length > 0) {
+    return {
+      ok: false,
+      kind: "blocked",
+      message: `Confirm the critical mappings first: ${critical.join(", ")}.`,
+    };
+  }
   const currentFields = draftFieldsToInvoicePatch(fields);
   const currentInvoice = { ...invoice, ...currentFields };
   const blockingIssues = validateInvoiceForConfirmation(currentInvoice).filter(
@@ -153,7 +179,7 @@ export function confirmDraft(
     };
   }
 
-  const hasMappings = ZONE_FIELDS.some((field) => assignments[field]);
+  const hasMappings = MAPPING_FIELDS.some((field) => assignments[field]);
   const isInvoiceOnly = !hasMappings && !invoice.templateDrift;
   const vendorName = fields.vendor || invoice.vendor;
   let templateAction: "none" | "saved" | "updated" = "none";
@@ -176,12 +202,14 @@ export function confirmDraft(
       };
     }
   } else {
-    const { specs, zones } = buildDraftAnchorSpecs(words, assignments);
+    const { specs, zones } = buildDraftAnchorSpecs(words, assignments, confirmedMappings);
     ports.saveVendorTemplate({
       vendor: vendorName,
       fields: specs,
       zones,
-      confirmNextCount: 0,
+      confirmNextCount: existingTemplate
+        ? existingTemplate.confirmNextCount ?? 0
+        : TEMPLATE_TRAINING_WHEELS,
       origin: invoice.templateDrift ? "drift-update" : "confirmed",
       invoiceId: invoice.id,
     });
@@ -202,6 +230,29 @@ export function confirmDraft(
   }
 
   if (invoice.templateHold) ports.confirmTemplateExtraction(invoice.vendor);
+
+  // The vendor record is written from the mapped identity values — the same
+  // values the reviewer just looked at — before the transition, because a
+  // write that can be refused (a bank detail needing a second signature) must
+  // be able to stop the confirm rather than land after it.
+  const profile = request.profile
+    ? { ...request.profile, updatedAt: request.profileUpdatedAt ?? request.profile.updatedAt }
+    : vendorProfileFromMapping(currentInvoice, undefined, new Date().toISOString());
+  let profileSaved = false;
+  if (request.profile || invoice.status === "vendor_profile") {
+    const savedProfile = ports.upsertVendor(profile);
+    if (!savedProfile.accepted) {
+      return {
+        ok: false,
+        kind: "persistence-rejected",
+        message:
+          savedProfile.reason ??
+          "The vendor record could not be saved, so the invoice stays where it is.",
+      };
+    }
+    profileSaved = true;
+  }
+
   if (!request.actor) {
     // Unreachable through the types, reachable through plain JavaScript. Better
     // a sentence than a crash inside the state machine's role check.
@@ -211,8 +262,9 @@ export function confirmDraft(
       message: "Nobody is signed in to confirm this draft.",
     };
   }
+  const transitionId = confirmTransitionFor(invoice.status);
   const transition = ports.applyTransition(invoice.id, {
-    transition: "confirm",
+    transition: transitionId,
     actor: request.actor,
   });
   if (!transition.accepted) {
@@ -223,18 +275,11 @@ export function confirmDraft(
     };
   }
 
-  if (request.profile) {
-    ports.upsertVendor({
-      ...request.profile,
-      updatedAt: request.profileUpdatedAt ?? request.profile.updatedAt,
-    });
-  }
-
   return {
     ok: true,
     vendor: vendorName,
     templateAction,
-    profileSaved: Boolean(request.profile),
+    profileSaved,
     learnedCount: request.learnedCount ?? 0,
   };
 }
@@ -245,6 +290,8 @@ export type PersistLineItemsSpecRequest = {
   assignments: DraftAssignments;
   words: OcrWord[];
   lineItems: LineItemsSpec;
+  existingTemplate?: VendorTemplate | undefined;
+  confirmedMappings?: Partial<Record<ZoneField, boolean>> | undefined;
 };
 
 export type PersistLineItemsSpecResult =
@@ -255,7 +302,11 @@ export function persistDraftLineItemsSpec(
   request: PersistLineItemsSpecRequest,
   ports: Pick<DraftPersistencePorts, "saveVendorTemplate">,
 ): PersistLineItemsSpecResult {
-  const { specs, zones } = buildDraftAnchorSpecs(request.words, request.assignments);
+  const { specs, zones } = buildDraftAnchorSpecs(
+    request.words,
+    request.assignments,
+    request.confirmedMappings,
+  );
   if (Object.keys(specs).length === 0) {
     return {
       ok: false,
@@ -269,6 +320,9 @@ export function persistDraftLineItemsSpec(
     fields: specs,
     zones,
     lineItems: request.lineItems,
+    confirmNextCount: request.existingTemplate
+      ? request.existingTemplate.confirmNextCount ?? 0
+      : TEMPLATE_TRAINING_WHEELS,
     origin: "confirmed",
     invoiceId: request.invoice.id,
   });

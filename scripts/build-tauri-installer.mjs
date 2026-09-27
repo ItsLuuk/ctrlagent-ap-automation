@@ -240,6 +240,13 @@ async function archiveDesktopApp(executablePath, buildId) {
   const archivedExecutable = path.join(versionRoot, "app.exe");
   await rm(archivedExecutable, { force: true });
   await cp(executablePath, archivedExecutable);
+  // WebView2Loader.dll is required next to app.exe at runtime; missing it
+  // causes STATUS_DLL_NOT_FOUND (0xC0000135) on launch.
+  const dllName = "WebView2Loader.dll";
+  const dllSrc = path.join(path.dirname(executablePath), dllName);
+  if (await exists(dllSrc)) {
+    await cp(dllSrc, path.join(versionRoot, dllName));
+  }
   await writeFile(
     path.join(buildRoot, "current.json"),
     `${JSON.stringify({ buildId, executable: path.relative(buildRoot, archivedExecutable) }, null, 2)}\n`,

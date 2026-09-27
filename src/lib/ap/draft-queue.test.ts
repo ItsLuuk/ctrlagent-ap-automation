@@ -13,7 +13,7 @@ const invoice = (over: Partial<Invoice> = {}): Invoice =>
     audit: [],
     lineItems: [],
     tags: [],
-    provenance: {},
+    confidence: {},
     createdAt: new Date(0).toISOString(),
     ...over,
   }) as Invoice;
@@ -132,5 +132,74 @@ describe("buildQueue", () => {
         },
       }),
     ).toEqual([]);
+  });
+
+  it("respects crossCheckKind: warning in draft scope", () => {
+    const items = buildQueue({
+      blockingIssues: [],
+      warningIssues: [],
+      amberFields: [],
+      crossCheckOk: false,
+      crossCheckDetail: "Lines sum €115.00 but subtotal is €79.95",
+      crossCheckKind: "warning",
+      vendor: {
+        name: "Superbaas B.V.",
+        email: "info@superbaas.nl",
+        address: "Nieuweweg 1",
+        iban: "NL00BANK1234567890",
+        vatNumber: "NL001234567B01",
+        businessRegistrationNumber: "12345678",
+        department: "Engineering",
+        updatedAt: "",
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("warning");
+    expect(items[0]?.key).toBe("warning:cross-check");
+  });
+
+  it("crossCheckKind none suppresses the cross-check item", () => {
+    const items = buildQueue({
+      blockingIssues: [],
+      warningIssues: [],
+      amberFields: [],
+      crossCheckOk: false,
+      crossCheckDetail: "ignored",
+      crossCheckKind: "none",
+      vendor: {
+        name: "Acme",
+        email: "b@a.co",
+        address: "x",
+        iban: "y",
+        vatNumber: "z",
+        kvkNumber: "12345678",
+        department: "Sales",
+        updatedAt: "",
+      },
+    });
+    expect(items).toEqual([]);
+  });
+
+  it("defaults to blocking when crossCheckKind is omitted", () => {
+    const items = buildQueue({
+      blockingIssues: [],
+      warningIssues: [],
+      amberFields: [],
+      crossCheckOk: false,
+      crossCheckDetail: "Lines sum €100 but total is €120",
+      vendor: {
+        name: "Acme",
+        email: "b@a.co",
+        address: "x",
+        iban: "y",
+        vatNumber: "z",
+        kvkNumber: "12345678",
+        department: "Sales",
+        updatedAt: "",
+      },
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]?.kind).toBe("blocking");
+    expect(items[0]?.key).toBe("blocking:cross-check");
   });
 });

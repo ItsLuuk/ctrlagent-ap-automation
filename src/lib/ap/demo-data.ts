@@ -14,8 +14,8 @@
  *  2. Removal only ever touches those records, so clearing the demo can never
  *     take a real capture with it.
  */
-import { sampleHistory, sampleInvoices } from "./samples";
-import { samplePos, type PurchaseOrder } from "./po-store";
+import { sampleHistory, sampleInvoices, samplePos } from "./samples";
+import type { PurchaseOrder } from "./purchase-order";
 import type { Invoice } from "./types";
 
 /** The whole demo set: the queue, the history and the POs it matches against. */

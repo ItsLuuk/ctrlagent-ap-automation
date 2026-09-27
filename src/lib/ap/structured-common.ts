@@ -117,28 +117,34 @@ function decodeXmlSniffChunk(buf: Uint8Array): string | null {
  * sniffed XML string. Returns null on malformed XML.
  */
 function tryParseRootOnly(text: string): { local: string; ns: string } | null {
-  const doc = new DOMParser().parseFromString(text, "text/xml");
-  if (hasParseError(doc)) return null;
-  const root = doc.documentElement;
-  if (!root) return null;
-  return {
-    local: root.localName,
-    ns: root.namespaceURI ?? "",
-  };
+  try {
+    const doc = new DOMParser().parseFromString(text, "text/xml");
+    if (hasParseError(doc)) return null;
+    const root = doc.documentElement;
+    if (!root) return null;
+    return {
+      local: root.localName,
+      ns: root.namespaceURI ?? "",
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function hasParseError(doc: Document): boolean {
-  // DOMParser embeds a parsererror element; the namespace differs per WebView.
-  const pw = doc.getElementsByTagNameNS("http://www.mozilla.org/xmldata", "parsererror");
-  if (pw.length > 0) return true;
-  const pe = doc.getElementsByTagName("parsererror");
-  if (pe.length > 0) return true;
-  // Firefox adds a <parsererror> in the SVG namespace sometimes; anything that
-  // looks like a parse error element is an error.
-  for (const el of doc.documentElement?.childNodes ?? []) {
-    if (el.nodeType === 1 && (el as Element).localName === "parsererror") return true;
+  try {
+    // xmldom throws on parse error; browser/WebView embeds <parsererror>.
+    const pw = doc.getElementsByTagNameNS("http://www.mozilla.org/xmldata", "parsererror");
+    if (pw.length > 0) return true;
+    const pe = doc.getElementsByTagName("parsererror");
+    if (pe.length > 0) return true;
+    for (const el of doc.documentElement?.childNodes ?? []) {
+      if (el.nodeType === 1 && (el as Element).localName === "parsererror") return true;
+    }
+    return false;
+  } catch {
+    return true;
   }
-  return false;
 }
 
 // ── Shared helpers ──────────────────────────────────────────────────────

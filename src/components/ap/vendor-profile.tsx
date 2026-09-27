@@ -28,10 +28,11 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { ConfidenceChip } from "./status";
 import { ZoneCheckChip } from "./zone-check-chip";
 import { cn } from "@/lib/utils";
 import type { ZoneCheckResult } from "@/lib/ap/types";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import type { VendorMaster } from "@/lib/ap/vendor-master";
 
 /** Stable two-letter initials for the circular logo. */
@@ -42,31 +43,18 @@ export function initialsOf(vendor: string): string {
   return (parts[0]![0]! + parts[parts.length - 1]![0]!).toUpperCase();
 }
 
-const DEPARTMENT_TONES: Record<string, string> = {
-  Engineering: "bg-primary/15 text-accent-foreground",
-  Finance: "bg-primary/20 text-accent-foreground",
-  Marketing: "bg-warning/15 text-warning-foreground",
-  Operations: "bg-success/15 text-success-foreground",
-  Sales: "bg-warning/20 text-warning-foreground",
-  People: "bg-secondary text-foreground",
-};
-
-/** Deterministic fallback tone for vendors without a department. */
+/** Deterministic pastel tone for the logo circle, keyed by vendor name. */
 export function logoTone(vendor: string): string {
   const tones = [
-    "bg-primary/15 text-accent-foreground",
+    "bg-accent/15 text-accent-foreground",
+    "bg-primary/15 text-primary",
     "bg-success/15 text-success-foreground",
     "bg-warning/15 text-warning-foreground",
-    "bg-secondary text-foreground",
+    "bg-destructive/15 text-destructive",
   ];
   let hash = 0;
   for (const ch of vendor) hash = (hash * 31 + ch.charCodeAt(0)) | 0;
   return tones[Math.abs(hash) % tones.length]!;
-}
-
-/** Keep the vendor circle tied to the department that owns the relationship. */
-export function departmentLogoTone(department: string | undefined, vendor?: string): string {
-  return (department && DEPARTMENT_TONES[department]) || logoTone(vendor ?? "unknown");
 }
 
 /** Billing email: the master record's email, or a derived fallback. */
@@ -78,19 +66,14 @@ export function vendorEmail(vendor: string, record?: VendorMaster): string {
 /** Circular vendor logo from the master record, or initials fallback. */
 export function VendorLogo({
   vendor,
-  department,
   className = "size-11 text-sm",
 }: {
   vendor: string;
-  /** Explicit department while a profile is being edited. */
-  department?: string | undefined;
   /** Tailwind size + text classes, e.g. "size-8 text-xs". */
   className?: string;
 }) {
   const { vendors } = useAp();
-  const record = vendors[vendor];
-  const logoUrl = record?.logoUrl;
-  const resolvedDepartment = department ?? record?.department;
+  const logoUrl = vendors[vendor]?.logoUrl;
   if (logoUrl) {
     return (
       <img
@@ -105,8 +88,7 @@ export function VendorLogo({
     <div
       aria-hidden
       className={cn(
-        "flex shrink-0 items-center justify-center rounded-full font-semibold",
-        departmentLogoTone(resolvedDepartment, vendor),
+        "flex shrink-0 items-center justify-center rounded-full bg-[#0485F7] font-semibold text-white",
         className,
       )}
     >
@@ -117,12 +99,14 @@ export function VendorLogo({
 
 export function VendorProfile({
   vendor,
+  confidence,
   sourcePage,
   showPage,
   zoneCheck,
   onChange,
 }: {
   vendor: string;
+  confidence?: number | undefined;
   sourcePage?: number | undefined;
   showPage?: boolean | undefined;
   zoneCheck?: ZoneCheckResult | undefined;
@@ -149,6 +133,7 @@ export function VendorProfile({
               <span className="font-mono text-xs text-muted-foreground">p.{sourcePage}</span>
             ) : null}
             <ZoneCheckChip result={zoneCheck} />
+            <ConfidenceChip value={confidence} />
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="icon" variant="ghost" className="size-6" aria-label="Vendor actions">
@@ -197,8 +182,14 @@ export function VendorProfile({
         onSave={(next) => {
           // Renaming re-keys the master record and renames the invoice's vendor.
           if (next.name !== vendor && onChange) onChange(next.name);
-          upsertVendor(next);
+          const result = upsertVendor(next);
           setEditing(false);
+          if (!result.accepted) {
+            toast.info("Bank change sent for approval", {
+              description: result.reason,
+            });
+            return;
+          }
           toast.success("We saved the vendor details");
         }}
       />
@@ -222,6 +213,7 @@ function EditVendorDialog({
 }) {
   const [name, setName] = useState(vendor);
   const [email, setEmail] = useState(record?.email ?? vendorEmail(vendor, record));
+  const [iban, setIban] = useState(record?.iban ?? "");
   const [logoUrl, setLogoUrl] = useState<string | undefined>(record?.logoUrl);
 
   // Reset local state when opening for a (possibly different) vendor.
@@ -231,6 +223,7 @@ function EditVendorDialog({
     setLastKey(key);
     setName(vendor);
     setEmail(record?.email ?? vendorEmail(vendor, record));
+    setIban(record?.iban ?? "");
     setLogoUrl(record?.logoUrl);
   }
 
@@ -256,7 +249,7 @@ function EditVendorDialog({
             ) : (
               <div
                 aria-hidden
-                className={`flex size-12 items-center justify-center rounded-full text-sm font-semibold ${departmentLogoTone(record?.department, name)}`}
+                className={`flex size-12 items-center justify-center rounded-full text-sm font-semibold ${logoTone(name)}`}
               >
                 {initialsOf(name)}
               </div>
@@ -287,6 +280,16 @@ function EditVendorDialog({
               placeholder="billing@vendor.com"
             />
           </label>
+          <label className="space-y-1.5">
+            <span className="block text-xs font-medium text-muted-foreground">IBAN</span>
+            <Input
+              value={iban}
+              onChange={(event) => setIban(event.target.value.toUpperCase())}
+              placeholder="NL91ABNA0417164300"
+              className="font-mono"
+            />
+            <span className="block text-xs text-muted-foreground">Changes require approval by someone else.</span>
+          </label>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>
@@ -295,8 +298,10 @@ function EditVendorDialog({
           <Button
             onClick={() =>
               onSave({
+                ...record,
                 name: name.trim() || vendor,
                 email: email.trim(),
+                iban: iban.trim() || undefined,
                 logoUrl,
                 updatedAt: new Date().toISOString(),
               })

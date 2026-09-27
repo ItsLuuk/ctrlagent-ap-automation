@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { AlertTriangle, Check, Loader2, Send } from "@/components/icons";
+import { AlertTriangle, BadgeCheck, Brain, Check, Loader2, PenLine, Send } from "@/components/icons";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -19,13 +19,14 @@ import { DocPreview } from "@/components/ap/doc-preview";
 import { isImageInvoice } from "@/lib/ap/file-type";
 import { businessRegistrationLabel, registrationCountry } from "@/lib/ap/business-registration";
 import { DraftMapper } from "@/components/ap/draft-mapper";
-import { VendorProfileRegistration } from "@/components/ap/vendor-profile-registration";
 import { LineItemsList } from "@/components/ap/line-items-list";
+import { GoodsReceiptEditor } from "@/components/ap/goods-receipt-editor";
 import { CrossCheckLine } from "@/components/ap/assign-popover";
 import { suggestZone, totalsCrossCheck } from "@/lib/ap/mapping";
 import { VendorProfile } from "@/components/ap/vendor-profile";
+import { vendorProfileFromMapping } from "@/lib/ap/vendor-master";
 import { resultFor } from "@/components/ap/zone-check-chip";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import { ApprovalVerdictStrip } from "@/components/ap/approval-verdict";
 import { DecisionNotice } from "@/components/ap/decision-notice";
 import { ApprovalCompare } from "@/components/ap/approval-compare";
@@ -34,19 +35,16 @@ import { ApprovalDecisionBar } from "@/components/ap/approval-decision-bar";
 import { RecordDetails } from "@/components/ap/record-details";
 import { buildApprovalVerdict, correctionAction } from "@/lib/ap/approval";
 import { matchInvoiceToPo } from "@/lib/ap/matching";
+import { matchNoPoInvoice } from "@/lib/ap/flex-matching";
+import { suggestGlCoding, type CodingField } from "@/lib/ap/gl-coding";
 import { suggestPo } from "@/lib/ap/po-store";
-import {
-  freezeLabel,
-  handoffMarkerInForce,
-  isFrozen,
-  type Actor,
-  type TransitionId,
-} from "@/lib/ap/state-machine";
+import { codingOptionsFor } from "@/lib/ap/entities";
+import { isFrozen, freezeLabel, type Actor, type TransitionId } from "@/lib/ap/state-machine";
+import { operatorActorWithRole } from "@/lib/ap/operator";
 import {
   APPROVAL_AHEAD,
   CURRENCY_OPTIONS,
   DEPARTMENTS,
-  GL_ACCOUNTS,
   ZONE_FIELDS,
   money,
   type ExtractedField,
@@ -55,9 +53,21 @@ import {
   type Zone,
   type ZoneField,
 } from "@/lib/ap/types";
-import { erpRefsFor, syncStateFor } from "@/lib/ap/erp-sync";
+import { erpRefsFor, latestSyncByInvoice, syncStateFor } from "@/lib/ap/erp-sync";
+import { attentionForInvoice } from "@/lib/ap/attention";
 import { cn } from "@/lib/utils";
+import { countOf } from "@/lib/ap/vocabulary";
 import { processingStageLabel } from "@/lib/ap/processing-errors";
+
+const LOW_CONFIDENCE_THRESHOLD = 0.75;
+const CODING_FIELD_LABELS: Record<CodingField, string> = {
+  glAccount: "GL account",
+  category: "Category",
+  department: "Department",
+  costCenter: "Cost center",
+  project: "Project",
+  location: "Location",
+};
 
 export const Route = createFileRoute("/invoices/$id")({
   head: () => ({
@@ -107,15 +117,44 @@ function InvoiceDetail() {
 
   if (invoice.status === "processing") return <ProcessingInvoice invoice={invoice} />;
   if (invoice.status === "failed") return <FailedInvoice invoice={invoice} />;
-  if (invoice.status === "vendor_profile") return <VendorProfileRegistration invoice={invoice} />;
+  if (isMapperView(invoice)) return <MapperView invoice={invoice} />;
   return <Detail invoice={invoice} />;
+}
+
+/**
+ * Where the mapper runs. It is the one screen that pins a vendor's identity
+ * *and* teaches its template, so it owns both ends of the front of the flow:
+ * Profiling (a vendor we have never seen — the identity is mapped off the same
+ * document as the invoice fields) and Draft (a known one whose template still
+ * has to be confirmed). Only uploads have a document to map against.
+ */
+function isMapperView(invoice: Invoice): boolean {
+  if (invoice.source !== "upload" || invoice.processing) return false;
+  return invoice.status === "vendor_profile" || invoice.status === "draft";
+}
+
+/** The mapper screen in its shell, with the low-confidence banner it needs. */
+function MapperView({ invoice }: { invoice: Invoice }) {
+  const lowConfidence = (Object.keys(invoice.confidence ?? {}) as ExtractedField[]).filter(
+    (k) => (invoice.confidence?.[k] ?? 1) < LOW_CONFIDENCE_THRESHOLD,
+  );
+  return (
+    <Shell>
+      <DraftMapper
+        invoice={invoice}
+        banner={
+          lowConfidence.length > 0 ? <LowConfidenceNotice count={lowConfidence.length} /> : null
+        }
+      />
+    </Shell>
+  );
 }
 
 function ProcessingInvoice({ invoice }: { invoice: Invoice }) {
   return (
     <Shell>
       <ReviewHeader invoice={invoice} />
-      <div className="mt-6 rounded-lg border border-border bg-card p-8 text-center shadow-[0_1px_2px_rgba(0,0,0,0.04),0_12px_40px_rgba(0,0,0,0.07)]">
+      <div className="mt-6 rounded-lg bg-card p-8 text-center shadow-whisper">
         <Loader2 className="mx-auto size-7 animate-spin text-muted-foreground" />
         <p className="mt-4 text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">
           Preparing → Ready to review
@@ -198,8 +237,18 @@ function Detail({ invoice }: { invoice: Invoice }) {
     upsertTemplate,
     purchaseOrders,
     linkPo,
+    recordReceipt,
     vendors,
-    operator,
+    upsertVendor,
+    flexRules,
+    flexContracts,
+    flexReceipts,
+    invoices,
+    history,
+    removed,
+    vendorProfiles,
+    businessProfile,
+    activeEntity,
   } = useAp();
   const navigate = useNavigate();
   const [legacyZoneEdit, setLegacyZoneEdit] = useState(false);
@@ -207,7 +256,9 @@ function Detail({ invoice }: { invoice: Invoice }) {
 
   const syncState = syncStateFor(invoice.id);
   const erpRefs = erpRefsFor(invoice.id);
-  const hasHandoffMarker = handoffMarkerInForce(invoice);
+  const hasHandoffMarker = invoice.audit.some(
+    (entry) => entry.action === "Marked ready for external handoff",
+  );
   const startManualReview = () => {
     updateInvoice(
       invoice.id,
@@ -221,29 +272,52 @@ function Detail({ invoice }: { invoice: Invoice }) {
   };
 
   /** Draft uploads map through the DraftMapper (the teaching screen). */
-  const useDraftMapperView =
-    invoice.status === "draft" && invoice.source === "upload" && !invoice.processing;
+  const useDraftMapperView = isMapperView(invoice);
 
-  /**
-   * The one person running this install signs every action on this screen.
-   *
-   * It used to be a trio of invented colleagues — a processor, an approver and
-   * a "Payments" box — picked per phase to satisfy the role gates. That made
-   * every signature fiction, and two people sharing a device would both have
-   * signed as the same invented processor, so the name-based SoD comparison
-   * compared an alias against itself. One operator holding all three human
-   * roles is both the truth and what the gates need; the gates themselves are
-   * untouched, and the machine still signs extraction events as `system`.
-   */
+  const lowConfidence = (Object.keys(invoice.confidence ?? {}) as ExtractedField[]).filter(
+    (k) => (invoice.confidence?.[k] ?? 1) < LOW_CONFIDENCE_THRESHOLD,
+  );
+  const isLow = (confidence: number | undefined) =>
+    confidence !== undefined && confidence < LOW_CONFIDENCE_THRESHOLD;
+
+  /** Demo personas per phase role (until real auth exists). SoD is enforced
+   *  by the state machine, not by hiding buttons. The `actingAs` identity is
+   *  shown on screen so the user always knows whose signature they are putting
+   *  on the record — today this names a real person the app invented, which is
+   *  the bug: two people using the same device would both sign as Dana and SoD
+   *  would compare an alias against itself. */
+  const actors = {
+    processor: operatorActorWithRole("processor", businessProfile),
+    approver: operatorActorWithRole("approver", businessProfile),
+    treasury: operatorActorWithRole("treasury", businessProfile),
+  };
+
+  /** The persona whose name goes on this screen's actions and audit entries.
+   *  Shown in the header so the user always knows who they are acting as. */
+  const editor = invoice.status === "review" ? actors.approver : actors.processor;
+
   /** The comparison runs against the linked purchase order, so no link means
    *  there is nothing on our side to match the lines against. */
   const linkedPo = invoice.poId ? purchaseOrders.find((p) => p.id === invoice.poId) : undefined;
   const matchResult =
     invoice.lineItems.length > 0
       ? matchInvoiceToPo(invoice.lineItems, linkedPo?.lines ?? [], {
-          receipts: linkedPo?.receipts,
+          receipts: linkedPo ? linkedPo.receipts ?? [] : undefined,
         })
       : null;
+  const flexMatch =
+    !linkedPo
+      ? matchNoPoInvoice(invoice, {
+          contracts: flexContracts,
+          receipts: flexReceipts,
+          rules: flexRules,
+        })
+      : undefined;
+  const attention = attentionForInvoice(
+    invoice,
+    latestSyncByInvoice()[invoice.id],
+    flexMatch,
+  );
   const poSuggestion = suggestPo(invoice.vendor, invoice.lineItems);
   const totalsCheck = totalsCrossCheck(invoice);
 
@@ -253,7 +327,39 @@ function Detail({ invoice }: { invoice: Invoice }) {
     vendorRecord,
     po: linkedPo,
     match: matchResult,
+    flexMatch,
+    profile: businessProfile,
+    entity: activeEntity,
   });
+  const codingSuggestion = suggestGlCoding(
+    invoice,
+    [...invoices, ...history, ...removed],
+    vendorProfiles,
+  );
+  const suggestedCoding = codingSuggestion?.fields ?? {};
+  const codingSuggestionItems = (Object.keys(suggestedCoding) as CodingField[])
+    .filter((field) => suggestedCoding[field] !== invoice[field])
+    .map((field) => ({ field, value: suggestedCoding[field]! }));
+  const acceptCodingSuggestion = () => {
+    if (!codingSuggestion || codingSuggestionItems.length === 0) return;
+    const patch: Partial<Invoice> = {
+      glAccount: suggestedCoding.glAccount ?? invoice.glAccount,
+      department: suggestedCoding.department ?? invoice.department,
+      ...(suggestedCoding.category !== undefined ? { category: suggestedCoding.category } : {}),
+      ...(suggestedCoding.costCenter !== undefined
+        ? { costCenter: suggestedCoding.costCenter }
+        : {}),
+      ...(suggestedCoding.project !== undefined ? { project: suggestedCoding.project } : {}),
+      ...(suggestedCoding.location !== undefined ? { location: suggestedCoding.location } : {}),
+    };
+    updateInvoice(
+      invoice.id,
+      patch,
+      "Accepted coding suggestion",
+      `${codingSuggestion.reason} Confidence ${Math.round(codingSuggestion.confidence * 100)}%.`,
+      editor.name,
+    );
+  };
 
   /** Content is still editable while it can still change hands: Draft and
    *  For approval. Past that the record is the record.
@@ -276,6 +382,12 @@ function Detail({ invoice }: { invoice: Invoice }) {
   /** Whether approving is still a question at all: the strip is a verdict about
    *  approving, so it runs only where that decision is still open. */
   const approvalIsAhead = APPROVAL_AHEAD.includes(invoice.status);
+  /** The last query sent on this invoice, if any — shown until the user leaves
+   *  the screen so they always know what question is sitting on the record. */
+  const lastQuery = useMemo(
+    () => invoice.audit.filter((e) => e.action === "Query sent").slice(-1)[0]?.note,
+    [invoice.audit],
+  );
   const isImage = Boolean(invoice.fileUrl && isImageInvoice(invoice.fileType, invoice.fileName));
 
   /** Where each field sits on the page, for the row → document jump. */
@@ -307,7 +419,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
       patchValue,
       correctionAction(label),
       `was ${before || "empty"} → ${after || "empty"}`,
-      operator.name,
+      editor.name,
     );
     if (!applied.accepted) {
       // The record moved under the editor (an approval landing mid-edit, say):
@@ -354,7 +466,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
       { lineItems: next },
       correctionAction("line items"),
       "Line items changed while reviewing.",
-      operator.name,
+      editor.name,
     );
   };
   const onLineItemsChange = (items: LineItem[]) => {
@@ -409,11 +521,17 @@ function Detail({ invoice }: { invoice: Invoice }) {
     opts?.onDone?.();
   };
 
+  /** The draft mapper is the only screen that states read confidence: by review
+   *  time every row carries its own chip, so a banner here would be a count of
+   *  information already marked where it matters. */
+  const lowConfidenceNotice =
+    lowConfidence.length > 0 ? <LowConfidenceNotice count={lowConfidence.length} /> : null;
+
   /* ── Editable pieces of the compare list ────────────────────────────── */
 
   function lockedField(label: string, value: ReactNode) {
     return (
-      <div className="flex flex-col gap-1 rounded-md border border-border bg-card/50 px-3 py-2">
+      <div className="flex flex-col gap-1 rounded-md bg-card/50 px-3 py-2 shadow-whisper">
         <p className="text-xs font-medium text-muted-foreground">{label}</p>
         <p className="text-sm font-medium">{value}</p>
         <p className="text-xs text-muted-foreground">{lockedHint}</p>
@@ -447,6 +565,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <EditableValue
             label="Address"
             value={invoice.address ?? ""}
+            low={isLow(invoice.confidence?.address)}
             onCommit={(v) => correct("address", "Address", v)}
           />
         ),
@@ -455,6 +574,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
             label="IBAN"
             mono
             value={invoice.iban ?? ""}
+            low={isLow(invoice.confidence?.iban)}
             onCommit={(v) => correct("iban", "IBAN", v)}
           />
         ),
@@ -480,6 +600,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <EditableValue
             label="Invoice no."
             value={invoice.invoiceNumber}
+            low={isLow(invoice.confidence?.invoiceNumber)}
             onCommit={(v) => correct("invoiceNumber", "Invoice no.", v)}
           />
         ),
@@ -570,18 +691,18 @@ function Detail({ invoice }: { invoice: Invoice }) {
           />
         </div>
       ) : (
-        <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/50 px-4 py-3">
+        <div className="flex flex-col gap-2 rounded-lg bg-card/50 px-4 py-3 shadow-whisper">
           <p className="text-xs font-medium text-muted-foreground">Amounts locked</p>
           <div className="grid gap-2 sm:grid-cols-3">
-            <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+            <div className="rounded-md bg-card/50 px-3 py-2 shadow-whisper">
               <p className="text-xs text-muted-foreground">Subtotal</p>
               <p className="font-mono text-sm">{money(invoice.subtotal, invoice.currency)}</p>
             </div>
-            <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+            <div className="rounded-md bg-card/50 px-3 py-2 shadow-whisper">
               <p className="text-xs text-muted-foreground">Tax</p>
               <p className="font-mono text-sm">{money(invoice.tax, invoice.currency)}</p>
             </div>
-            <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+            <div className="rounded-md bg-card/50 px-3 py-2 shadow-whisper">
               <p className="text-xs text-muted-foreground">Total</p>
               <p className="font-mono text-sm">{money(invoice.total, invoice.currency)}</p>
             </div>
@@ -602,6 +723,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
         items={invoice.lineItems}
         currency={invoice.currency}
         editable={canEdit}
+        isDraft={invoice.status === "draft"}
         subtotal={invoice.subtotal}
         tax={invoice.tax}
         invoiceTotal={invoice.total}
@@ -611,63 +733,118 @@ function Detail({ invoice }: { invoice: Invoice }) {
   );
 
   const codingEditor = canEdit ? (
-    <div className="grid gap-3 sm:grid-cols-2">
-      <div className="space-y-1.5">
-        <Label className="text-xs text-muted-foreground">Department</Label>
-        <Select
-          value={invoice.department}
-          onValueChange={(value) =>
-            recordCorrection({ department: value }, "Department", invoice.department, value)
-          }
-        >
-          <SelectTrigger className="h-9">
-            <SelectValue placeholder="Choose a department" />
-          </SelectTrigger>
-          <SelectContent>
-            {DEPARTMENTS.map((department) => (
-              <SelectItem key={department} value={department}>
-                {department}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+    <div className="space-y-3">
+      {codingSuggestion && codingSuggestionItems.length > 0 ? (
+        <div className="rounded-lg border border-info/30 bg-info/5 p-3 shadow-whisper">
+          <div className="flex items-start gap-2">
+            <Brain className="mt-0.5 size-4 shrink-0 text-info" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">Suggested coding</p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                {codingSuggestion.reason} Confidence {Math.round(codingSuggestion.confidence * 100)}%.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {codingSuggestionItems.map(({ field, value }) => (
+                  <span key={field} className="rounded-full bg-card px-2 py-1 text-xs">
+                    {CODING_FIELD_LABELS[field]}: {value}
+                  </span>
+                ))}
+              </div>
+            </div>
+            <Button size="sm" onClick={acceptCodingSuggestion} className="shrink-0 gap-1.5">
+              <Check className="size-3.5" /> Use suggestion
+            </Button>
+          </div>
+        </div>
+      ) : null}
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">Department</Label>
+          <Select
+            value={invoice.department}
+            onValueChange={(value) =>
+              recordCorrection({ department: value }, "Department", invoice.department, value)
+            }
+          >
+            <SelectTrigger className="h-9">
+              <SelectValue placeholder="Choose a department" />
+            </SelectTrigger>
+            <SelectContent>
+              {DEPARTMENTS.map((department) => (
+                <SelectItem key={department} value={department}>
+                  {department}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label className="text-xs text-muted-foreground">GL account</Label>
+          <Select
+            value={invoice.glAccount}
+            onValueChange={(value) =>
+              recordCorrection({ glAccount: value }, "GL account", invoice.glAccount, value)
+            }
+          >
+            <SelectTrigger className="h-9">
+              <SelectValue placeholder="Choose a GL account" />
+            </SelectTrigger>
+            <SelectContent>
+              {codingOptionsFor(activeEntity, invoice.glAccount).map((account) => (
+                <SelectItem key={account} value={account}>
+                  {account}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        {(
+          [
+            ["category", "Category"],
+            ["costCenter", "Cost center"],
+            ["project", "Project"],
+            ["location", "Location"],
+          ] as const
+        ).map(([field, label]) => (
+          <div key={field} className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">{label}</Label>
+            <Input
+              value={invoice[field] ?? ""}
+              onChange={(event) =>
+                recordCorrection(
+                  { [field]: event.target.value },
+                  label,
+                  invoice[field] ?? "",
+                  event.target.value,
+                )
+              }
+              placeholder="Not set"
+              className="h-9"
+            />
+          </div>
+        ))}
       </div>
-      <div className="space-y-1.5">
-        <Label className="text-xs text-muted-foreground">GL account</Label>
-        <Select
-          value={invoice.glAccount}
-          onValueChange={(value) =>
-            recordCorrection({ glAccount: value }, "GL account", invoice.glAccount, value)
-          }
-        >
-          <SelectTrigger className="h-9">
-            <SelectValue placeholder="Choose a GL account" />
-          </SelectTrigger>
-          <SelectContent>
-            {GL_ACCOUNTS.map((account) => (
-              <SelectItem key={account} value={account}>
-                {account}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <p className="text-xs text-muted-foreground sm:col-span-2">
-        A department or a GL account is enough for approval — Foundry needs one dimension of coding.
+      <p className="text-xs text-muted-foreground">
+        Suggestions learn from corrected coding on prior invoices. Review before applying.
       </p>
     </div>
   ) : (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/50 px-4 py-3">
+    <div className="flex flex-col gap-2 rounded-lg bg-card/50 px-4 py-3 shadow-whisper">
       <p className="text-xs font-medium text-muted-foreground">Coding locked</p>
       <div className="grid gap-2 sm:grid-cols-2">
-        <div className="rounded-md border border-border bg-card/50 px-3 py-2">
-          <p className="text-xs text-muted-foreground">Department</p>
-          <p className="text-sm font-medium">{invoice.department || "—"}</p>
-        </div>
-        <div className="rounded-md border border-border bg-card/50 px-3 py-2">
-          <p className="text-xs text-muted-foreground">GL account</p>
-          <p className="text-sm font-medium">{invoice.glAccount || "—"}</p>
-        </div>
+        {[
+          ["Department", invoice.department],
+          ["GL account", invoice.glAccount],
+          ["Category", invoice.category],
+          ["Cost center", invoice.costCenter],
+          ["Project", invoice.project],
+          ["Location", invoice.location],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-md bg-card/50 px-3 py-2 shadow-whisper">
+            <p className="text-xs text-muted-foreground">{label}</p>
+            <p className="text-sm font-medium">{value || "—"}</p>
+          </div>
+        ))}
       </div>
       <p className="text-xs text-muted-foreground">{lockedHint}</p>
     </div>
@@ -675,6 +852,34 @@ function Detail({ invoice }: { invoice: Invoice }) {
 
   const commitmentsEditor = canEdit ? (
     <div className="flex flex-wrap items-center gap-2">
+      {!linkedPo && flexMatch ? (
+        <div
+          className={cn(
+            "w-full rounded-lg border px-4 py-3 text-sm shadow-whisper",
+            flexMatch.status === "matched" && flexMatch.canAutoApprove
+              ? "border-success/30 bg-success/5"
+              : flexMatch.blocksApproval
+                ? "border-destructive/30 bg-destructive/5"
+                : "border-warning/40 bg-warning/5",
+          )}
+        >
+          <div className="flex items-start gap-2">
+            {flexMatch.status === "matched" && flexMatch.canAutoApprove ? (
+              <Check className="mt-0.5 size-4 shrink-0 text-success-foreground" />
+            ) : (
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+            )}
+            <div>
+              <p className="font-medium">
+                {flexMatch.status === "matched" && flexMatch.canAutoApprove
+                  ? "Eligible for approval without a PO"
+                  : "No-PO approval evidence needs attention"}
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">{flexMatch.explanation}</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <Select
         value={invoice.poId ?? "none"}
         onValueChange={(value) => linkPo(invoice.id, value === "none" ? undefined : value)}
@@ -704,15 +909,20 @@ function Detail({ invoice }: { invoice: Invoice }) {
           ?
         </p>
       ) : null}
+      {linkedPo ? (
+        <div className="w-full">
+          <GoodsReceiptEditor purchaseOrder={linkedPo} onRecord={recordReceipt} />
+        </div>
+      ) : null}
     </div>
   ) : (
-    <div className="flex flex-col gap-2 rounded-lg border border-border bg-card/50 px-4 py-3">
+    <div className="flex flex-col gap-2 rounded-lg bg-card/50 px-4 py-3 shadow-whisper">
       <p className="text-xs font-medium text-muted-foreground">Purchase order locked</p>
-      <div className="rounded-md border border-border bg-card/50 px-3 py-2">
+      <div className="rounded-md bg-card/50 px-3 py-2 shadow-whisper">
         <p className="text-xs text-muted-foreground">Linked purchase order</p>
         <p className="text-sm font-medium">
           {invoice.poId
-            ? purchaseOrders.find((p) => p.id === invoice.poId)?.number ?? "—"
+            ? (purchaseOrders.find((p) => p.id === invoice.poId)?.number ?? "—")
             : "None"}
         </p>
       </div>
@@ -729,10 +939,30 @@ function Detail({ invoice }: { invoice: Invoice }) {
   const statusActions =
     invoice.status === "review" ? undefined : (
       <>
+        {/* A record that reaches Profiling without a document to map (nothing
+            in the app creates one today, but a restore can) still needs a way
+            out: save the profile the invoice already carries, into Draft. */}
+        {invoice.status === "vendor_profile" ? (
+          <Button
+            className="gap-2"
+            onClick={() => {
+              const saved = upsertVendor(vendorProfileFromMapping(invoice, vendorRecord));
+              if (!saved.accepted) {
+                toast.error("Couldn't save the vendor record", {
+                  description: saved.reason ?? "Try again — the audit log has more detail.",
+                });
+                return;
+              }
+              advance("vendor-profile-confirmed", actors.processor, "Profile saved from the record");
+            }}
+          >
+            <BadgeCheck className="size-4" /> Save profile & open draft
+          </Button>
+        ) : null}
         {invoice.status === "draft" ? (
           <Button
             className="gap-2"
-            onClick={() => advance("confirm", operator, "Sent for approval")}
+            onClick={() => advance("confirm", actors.processor, "Sent for approval")}
           >
             <Send className="size-4" /> Submit for approval
           </Button>
@@ -741,7 +971,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <Button
             className="gap-2"
             onClick={() =>
-              advance("release", operator, "Invoice marked ready for external handoff", {
+              advance("release", actors.treasury, "Invoice marked ready for external handoff", {
                 reason: "Approved invoice marked ready for external handoff",
               })
             }
@@ -758,7 +988,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
           <Button
             variant="outline"
             className="gap-2"
-            onClick={() => advance("reopen-draft", operator, "Reopened as draft")}
+            onClick={() => advance("reopen-draft", actors.processor, "Reopened as draft")}
           >
             Reopen as draft
           </Button>
@@ -778,10 +1008,20 @@ function Detail({ invoice }: { invoice: Invoice }) {
   return (
     <Shell>
       {useDraftMapperView ? (
-        <DraftMapper invoice={invoice} />
+        <DraftMapper invoice={invoice} banner={lowConfidenceNotice} />
       ) : (
         <>
-          <ReviewHeader invoice={invoice} />
+          <ReviewHeader invoice={invoice} actingAs={editor.name} />
+
+          {attention ? (
+            <div className="mt-5 flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+              <AlertTriangle className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+              <div>
+                <p className="text-sm font-medium text-warning-foreground">{attention.label}</p>
+                <p className="mt-1 text-xs text-muted-foreground">{attention.detail}</p>
+              </div>
+            </div>
+          ) : null}
 
           {invoice.status === "failed" && (
             <div className="mt-5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/10 p-3">
@@ -809,13 +1049,26 @@ function Detail({ invoice }: { invoice: Invoice }) {
           )}
 
           {approvalIsAhead ? (
-            <ApprovalVerdictStrip verdict={verdict} />
+            <ApprovalVerdictStrip verdict={verdict} onReviewNext={reviewNext} />
           ) : (
-            <DecisionNotice invoice={invoice} />
+            <>
+              <DecisionNotice invoice={invoice} />
+              {lastQuery ? (
+                <div className="mt-3 rounded-lg border border-warning/40 bg-warning/10 px-4 py-3">
+                  <div className="flex items-start gap-2">
+                    <PenLine className="mt-0.5 size-4 shrink-0 text-warning-foreground" />
+                    <div>
+                      <p className="text-xs font-medium text-warning-foreground">Question sent</p>
+                      <p className="mt-1 text-sm text-foreground">{lastQuery}</p>
+                    </div>
+                  </div>
+                </div>
+              ) : null}
+            </>
           )}
 
           <div className="mt-5 grid gap-5 pb-4 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
-            <section className="self-start overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)] lg:sticky lg:top-2">
+            <section className="self-start overflow-hidden rounded-lg bg-card shadow-whisper lg:sticky lg:top-2">
               <div className="flex items-center justify-between border-b border-border px-4 py-2.5">
                 <p className="text-xs font-medium text-muted-foreground">Document</p>
                 <div className="flex items-center gap-2">
@@ -877,6 +1130,7 @@ function Detail({ invoice }: { invoice: Invoice }) {
               vendorHeader={
                 <VendorProfile
                   vendor={invoice.vendor}
+                  confidence={invoice.confidence?.vendor}
                   sourcePage={invoice.fieldSources?.vendor}
                   showPage={(invoice.pageCount ?? 1) > 1}
                   // A frozen record takes no vendor patch either: the menu drops
@@ -906,16 +1160,18 @@ function Detail({ invoice }: { invoice: Invoice }) {
             blocked={approvalIsAhead && !verdict.canApprove}
             amount={invoice.total}
             currency={invoice.currency}
-            onApprove={() => advance("approve", operator, "Invoice approved")}
-            onQuery={(reason) => advance("query", operator, "Query sent", { reason })}
-            onReject={(reason) => advance("reject", operator, "Invoice rejected", { reason })}
+            onApprove={() => advance("approve", actors.approver, "Invoice approved")}
+            onQuery={(reason) => advance("query", actors.approver, "Query sent", { reason })}
+            onReject={(reason) =>
+              advance("reject", actors.approver, "Invoice rejected", { reason })
+            }
             onReviewNext={approvalIsAhead ? reviewNext : undefined}
             {...(invoice.status === "scheduled"
               ? {
                   // The door back in: signed, so an approver retracts it with a
                   // reason in the trail — the only way the frozen fields move.
                   onReopen: (reason: string) =>
-                    advance("re-open", operator, "Re-opened for approval", { reason }),
+                    advance("re-open", actors.approver, "Re-opened for approval", { reason }),
                 }
               : {})}
             {...(statusActions ? { actions: statusActions } : {})}
@@ -924,6 +1180,23 @@ function Detail({ invoice }: { invoice: Invoice }) {
         </>
       )}
     </Shell>
+  );
+}
+
+/**
+ * The read-confidence sentence, written once — the draft mapper's banner renders
+ * it in a box, on the screen where the values are still being read.
+ */
+function lowConfidenceLine(count: number): string {
+  return `${countOf(count, "field")} read with low confidence — check the highlighted values against the document.`;
+}
+
+function LowConfidenceNotice({ count }: { count: number }) {
+  return (
+    <div className="flex items-start gap-2 rounded-lg border border-warning/40 bg-warning/10 p-3 text-sm">
+      <PenLine className="mt-0.5 size-4 text-warning-foreground" />
+      <p className="text-warning-foreground">{lowConfidenceLine(count)}</p>
+    </div>
   );
 }
 
@@ -937,12 +1210,14 @@ function EditableValue({
   onCommit,
   type = "text",
   mono,
+  low,
 }: {
   label: string;
   value: string;
   onCommit: (next: string) => void;
   type?: string;
   mono?: boolean;
+  low?: boolean | undefined;
 }) {
   const [draft, setDraft] = useState(value);
   useEffect(() => {
@@ -967,7 +1242,11 @@ function EditableValue({
           event.currentTarget.blur();
         }
       }}
-      className={cn("mt-0.5 h-9 text-sm", mono || type === "number" ? "font-mono" : "")}
+      className={cn(
+        "mt-0.5 h-9 text-sm",
+        mono || type === "number" ? "font-mono" : "",
+        low ? "border-warning bg-warning/10" : "",
+      )}
     />
   );
 }

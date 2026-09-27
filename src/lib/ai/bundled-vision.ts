@@ -10,13 +10,13 @@
  * `OLLAMA_MODELS` pointed at the bundled weights.
  *
  * The outcome ladder, decided at boot:
- *   "webview"   — outside the Tauri shell: silent no-op (unit/e2e harness).
+ *   "browser"   — not a Tauri window: silent no-op (browser dev, e2e).
  *   "bundled"   — our runtime spawned and answered the health probe.
  *   "external"  — ours did not run (missing binary, or the port was already
  *                 taken by an Ollama the user installed) but something still
  *                 answers on 11434: use it, exactly as before.
  *   "fallback"  — nothing answers: on-device text recognition only, the
- *                 pre-existing Tesseract path.
+ *                 pre-existing text-layer path.
  *
  * Every failure mode collapses into one of those four values — this function
  * never throws and never logs errors, because it runs during app startup.
@@ -26,7 +26,7 @@ import { resourceDir } from "@tauri-apps/api/path";
 import { Command } from "@tauri-apps/plugin-shell";
 import { ollamaBase } from "./gemma";
 
-export type VisionRuntime = "webview" | "bundled" | "external" | "fallback";
+export type VisionRuntime = "browser" | "bundled" | "external" | "fallback";
 
 /** Scope name in src-tauri/capabilities/default.json; cmd is the staged exe. */
 export const VISION_RUNTIME_COMMAND = "vision-runtime";
@@ -80,7 +80,7 @@ export async function startVisionRuntime(
   deps: VisionRuntimeDeps = realDeps,
 ): Promise<VisionRuntime> {
   try {
-    if (!deps.isTauri()) return "webview";
+    if (!deps.isTauri()) return "browser";
 
     let closed: Promise<void>;
     try {

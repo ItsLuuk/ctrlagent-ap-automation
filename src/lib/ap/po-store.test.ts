@@ -1,5 +1,7 @@
 import { describe, expect, it } from "bun:test";
-import { findPosForVendor, samplePos, suggestPo, type PurchaseOrder } from "./po-store";
+import { findPosForVendor, suggestPo } from "./po-store";
+import { samplePos } from "./samples";
+import type { PurchaseOrder } from "./purchase-order";
 import type { InvoiceLineLike } from "./matching";
 
 const line = (id: string, description: string, quantity: number): InvoiceLineLike => ({

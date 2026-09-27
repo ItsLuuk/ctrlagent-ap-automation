@@ -13,26 +13,28 @@
  * from /tauri.html, where href="/" leaves the window for the server's 404
  * instead of navigating the running app.
  */
-import { Link, useRouter } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { CircleAlert, Search } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "./primitives";
 import { Shell } from "./shell";
 
-const HOME_LINK =
-  "text-xs font-medium text-muted-foreground underline underline-offset-2 hover:text-foreground";
-
 export function NotFoundScreen() {
+  const navigate = useNavigate();
   return (
     <Shell>
       <EmptyState
         icon={Search}
         title="Page not found"
         action={
-          <Link to="/" className={HOME_LINK}>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => navigate({ to: "/" })}
+          >
             Go home
-          </Link>
+          </Button>
         }
       >
         The page you're looking for doesn't exist or has been moved.
@@ -43,6 +45,7 @@ export function NotFoundScreen() {
 
 export function ErrorScreen({ error, reset }: { error: Error; reset: () => void }) {
   const router = useRouter();
+  const navigate = useNavigate();
 
   // The window shows the app, not a stack trace: the details go to the console,
   // where devtools and any reporter still find them.
@@ -59,6 +62,7 @@ export function ErrorScreen({ error, reset }: { error: Error; reset: () => void 
           <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-2">
             <Button
               size="sm"
+              variant="outline"
               onClick={() => {
                 router.invalidate();
                 reset();
@@ -66,9 +70,13 @@ export function ErrorScreen({ error, reset }: { error: Error; reset: () => void 
             >
               Try again
             </Button>
-            <Link to="/" className={HOME_LINK}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => navigate({ to: "/" })}
+            >
               Go home
-            </Link>
+            </Button>
           </div>
         }
       >

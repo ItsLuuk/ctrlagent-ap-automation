@@ -7,12 +7,8 @@
  */
 
 import { describe, expect, it } from "bun:test";
-import {
-  checkFileHash,
-  computeFileHash,
-  readKnownHashes,
-  recordFileHash,
-} from "./file-hash-gate";
+import { checkFileHash, computeFileHash } from "./file-hash";
+import { clearKnownHashes, readKnownHashes, recordFileHash } from "./file-hash-gate";
 import type { Invoice } from "./types";
 
 const HASH_KEY = "ap-automation-file-hashes-v1";
@@ -51,6 +47,7 @@ function stubInvoice(
     audit: [],
     source,
     fileHash,
+    createdAt: "2026-04-01T00:00:00.000Z",
   };
 }
 
@@ -86,7 +83,7 @@ describe("checkFileHash", () => {
     const existing = [stubInvoice("inv-1", "totally-different-hash")];
     const result = await checkFileHash(file, existing);
     expect(result.ok).toBe(true);
-    expect((result as { ok: true }).fileHash).toMatch(/^[0-9a-f]{64}$/);
+    expect((result as { ok: true; fileHash: string }).fileHash).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("detects a byte-identical duplicate among existing upload invoices", async () => {
@@ -99,8 +96,10 @@ describe("checkFileHash", () => {
     // Second upload of the same bytes: should be flagged as a duplicate.
     const result = await checkFileHash(file, existing);
     expect(result.ok).toBe(false);
-    expect((result as { ok: false }).duplicate).toBe(true);
-    expect((result as { duplicate: true }).existingId).toBe("inv-1");
+    expect((result as { ok: false; duplicate: true }).duplicate).toBe(true);
+    expect(
+      (result as { ok: false; duplicate: true; existingId: string }).existingId,
+    ).toBe("inv-1");
   });
 
   it("does not flag a sample-data invoice as a duplicate of an upload", async () => {
@@ -137,7 +136,7 @@ describe("checkFileHash", () => {
 
 describe("recordFileHash", () => {
   it("persists a new hash into the known set", () => {
-    if (typeof localStorage === "undefined") return; // skip in non-app test environments
+    if (typeof localStorage === "undefined") return; // skip in non-browser env
     clearHashStore();
     const before = readKnownHashes();
     expect(before.size).toBe(0);
@@ -148,11 +147,19 @@ describe("recordFileHash", () => {
   });
 
   it("deduplicates when the same hash is recorded twice", () => {
-    if (typeof localStorage === "undefined") return; // skip in non-app test environments
+    if (typeof localStorage === "undefined") return; // skip in non-browser env
     clearHashStore();
     recordFileHash("dup-hash");
     recordFileHash("dup-hash");
     expect(readKnownHashes().size).toBe(1);
     clearHashStore();
+  });
+
+  it("clears the remembered hashes when the workspace is reset", () => {
+    if (typeof localStorage === "undefined") return; // skip in non-browser env
+    clearHashStore();
+    recordFileHash("reset-me");
+    clearKnownHashes();
+    expect(readKnownHashes().size).toBe(0);
   });
 });

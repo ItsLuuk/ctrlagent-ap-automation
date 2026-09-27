@@ -17,7 +17,7 @@ describe("TAG_TONES", () => {
     expect(TAG_TONES["Late"].border).toContain("destructive");
     expect(TAG_TONES["Urgent"].border).toContain("destructive");
     expect(TAG_TONES["Duplicate risk"].border).toContain("destructive");
-    expect(TAG_TONES["First-time vendor"].border).toContain("warning");
+    expect(TAG_TONES["First-time vendor"].border).toContain("foundry-orange");
     expect(TAG_TONES["International"].border).toContain("steel");
   });
 });

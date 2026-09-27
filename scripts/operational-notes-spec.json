@@ -63,7 +63,7 @@
     ]},
     {"type": "paragraph", "runs": [
       {"text": "Verification. ", "bold": true},
-      {"text": "From the same machine, run curl http://127.0.0.1:11434/api/version. A healthy Ollama returns {\"version\": ...}. If that fails, Foundry cannot reach the model either, and the vision path falls back to Tesseract."}
+      {"text": "From the same machine, run curl http://127.0.0.1:11434/api/version. A healthy Ollama returns {\"version\": ...}. If that fails, Foundry cannot reach the model either, and the vision path falls back to the document text reader."}
     ]},
     {"type": "paragraph", "runs": [
       {"text": "Files. ", "bold": true},

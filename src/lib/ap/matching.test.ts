@@ -98,6 +98,16 @@ describe("three-way matching", () => {
     expect(r.lines[0]!.status).toBe("matched");
   });
 
+  it("adds multiple receipts for the same PO line", () => {
+    const r = matchInvoiceToPo([invLine("i1", "Widgets", 10, 80)], PO, {
+      receipts: [
+        { poLineId: "po1", quantityReceived: 4 },
+        { poLineId: "po1", quantityReceived: 6 },
+      ],
+    });
+    expect(r.lines[0]!.status).toBe("matched");
+  });
+
   it("flags missing receipts entirely", () => {
     const r = matchInvoiceToPo([invLine("i1", "Widgets", 10, 80)], PO, {
       receipts: [],

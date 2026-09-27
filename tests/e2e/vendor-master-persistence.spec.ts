@@ -24,7 +24,7 @@
  * fails if a key is hydrated from an effect or written before it is read.
  */
 import { test, expect, type Page } from "playwright/test";
-import { samplePos } from "../../src/lib/ap/po-store";
+import { samplePos } from "../../src/lib/ap/samples";
 import { sampleHistory, sampleInvoices } from "../../src/lib/ap/samples";
 import { EMPTY_BUSINESS_PROFILE, type Invoice, type VendorTemplate } from "../../src/lib/ap/types";
 import { openApp, seedStorage, STORAGE } from "./harness";

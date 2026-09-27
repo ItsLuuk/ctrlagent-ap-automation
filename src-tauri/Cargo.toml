@@ -34,3 +34,13 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 tauri-plugin-os = "2"
 tauri-plugin-shell = "2"
+
+# Tauri's build script sets its `dev` cfg to `!custom-protocol`, and that cfg is
+# what decides whether the desktop shell bundles `frontendDist` or points the
+# webview at `build.devUrl` (http://127.0.0.1:5173/tauri.html). Without this
+# declaration the feature can never be turned on, so every "production" build
+# silently produced a dev-mode binary: double-clicking the desktop shortcut
+# showed ERR_CONNECTION_REFUSED unless `bun run dev:tauri` happened to be
+# running. DO NOT REMOVE.
+[features]
+custom-protocol = ["tauri/custom-protocol"]

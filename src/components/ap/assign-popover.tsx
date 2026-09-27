@@ -1,11 +1,11 @@
 /**
  * Small presentational pieces of the DraftMapper screen: the field-assignment
- * popover (the two-click correction loop), the anchor chip, and the
+ * popover (the two-click correction loop) and the
  * line-items-vs-total cross-check line.
  */
 import { Ban, CircleAlert, CircleCheck, Link2 } from "@/components/icons";
 import { Button } from "@/components/ui/button";
-import { ZONE_FIELDS, ZONE_LABEL, type ZoneField } from "@/lib/ap/types";
+import { MAPPING_FIELDS, ZONE_LABEL, type ZoneField } from "@/lib/ap/types";
 
 export function AssignPopover({
   onAssign,
@@ -24,7 +24,7 @@ export function AssignPopover({
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-1.5">
-        {ZONE_FIELDS.map((field) => (
+        {MAPPING_FIELDS.map((field) => (
           <Button
             key={field}
             size="sm"
@@ -40,17 +40,6 @@ export function AssignPopover({
         </Button>
       </div>
     </div>
-  );
-}
-
-export function AnchorChip({ anchor }: { anchor: string }) {
-  return (
-    <span
-      className="inline-flex items-center gap-1 rounded-sm border border-border bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground"
-      title={`Anchor — future invoices locate the value by looking near “${anchor}”, which survives small layout shifts.`}
-    >
-      anchor: “{anchor}”
-    </span>
   );
 }
 
@@ -95,8 +84,8 @@ export function CrossCheckLine({
     : [{ label: "Lines = Total", value: lineItemsSum, match: isConsistent }];
   return (
     <div
-      className="rounded-xl border border-border p-3 transition-[border-left-width,border-left-color] duration-200 ease-out-expo"
-      style={isConsistent ? undefined : { borderLeft: "3px solid var(--warning)" }}
+      className="rounded-xl p-3 shadow-whisper transition-[border-left-width,border-left-color] duration-200 ease-out-expo"
+      style={isConsistent ? undefined : { borderLeft: "3px solid #f56900" }}
       role="status"
     >
       <div className="flex items-center justify-between gap-2">
@@ -104,7 +93,7 @@ export function CrossCheckLine({
           {isConsistent ? (
             <CircleCheck className="size-3.5 text-foreground" />
           ) : (
-            <CircleAlert className="size-3.5 text-warning-foreground" />
+            <CircleAlert className="size-3.5 text-foundry-orange" />
           )}
           Totals reconciliation
         </p>
@@ -119,7 +108,7 @@ export function CrossCheckLine({
             <dd className="flex items-center gap-1.5 font-mono text-xs font-medium">
               {formatter.format(r.value)}
               <span
-                className={r.match ? "text-foreground" : "text-warning-foreground"}
+                className={r.match ? "text-foreground" : "text-foundry-orange"}
                 aria-label={r.match ? "matches" : "mismatch"}
               >
                 {r.match ? <CircleCheck className="size-3" /> : <CircleAlert className="size-3" />}

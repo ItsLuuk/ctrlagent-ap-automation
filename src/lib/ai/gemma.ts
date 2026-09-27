@@ -1,15 +1,14 @@
-import { z } from "zod";
 import {
-  uid,
-  GL_ACCOUNTS,
-  DEPARTMENTS,
-  type ExtractedField,
-  type LineItem,
-  type Provenance,
-} from "../ap/types";
-import { collectVatCandidates, resolveSupplierVatNumber } from "../ap/ocr";
-import type { ExtractedFields, VatCandidate } from "../ap/ocr";
-import { moneyToNumber, dueDateFromPaymentTerms, detectPrepaid } from "../ap/zones";
+  parseVisionPage,
+  type VisionEngine,
+  type VisionPageResult,
+  type VisionProgress,
+} from "../ap/vision";
+
+// This module is the adapter for the `VisionEngine` port the domain owns
+// (see `../ap/vision`). It may import domain rules — page parsing, amount
+// coercion — but the domain must never import this file back, or the two form
+// a cycle that no longer has a seam to cut.
 
 /** Locally-installed vision models, best first. */
 export const VISION_MODELS = ["gemma3:4b-it-qat", "ornith-1.5:9b"];
@@ -20,7 +19,7 @@ export function imageExtractModelOrder(): string[] {
     const saved = localStorage.getItem("gemma-model");
     if (saved) return [saved];
   } catch {
-    /* unavailable or blocked local storage */
+    /* non-browser or blocked storage */
   }
   return [...VISION_MODELS];
 }
@@ -37,8 +36,8 @@ const OLLAMA_HOSTS = ["http://127.0.0.1:11434", "http://localhost:11434"];
 
 /** Ollama host Foundry speaks the model protocol against. User override
  *  lives in localStorage under `ollama-base`; the default is the standard
- *  localhost origin. This is the #1 support issue: the desktop WebView talking
- *  to localhost will not reach an Ollama that only listens on a custom address —
+ *  localhost origin. This is the #1 support issue: a browser talking to
+ *  localhost will not reach an Ollama that only listens on a custom address —
  *  verify with `curl http://127.0.0.1:11434/api/version` from the same
  *  machine and set the host in Settings → Vision model → Ollama host. */
 export function ollamaBase(): string {
@@ -46,7 +45,7 @@ export function ollamaBase(): string {
     const saved = localStorage.getItem("ollama-base");
     if (saved) return saved;
   } catch {
-    /* unavailable or blocked local storage */
+    /* non-browser or blocked storage */
   }
   return OLLAMA_HOSTS[0]!;
 }
@@ -56,7 +55,7 @@ export function gemmaModel(): string {
     const saved = localStorage.getItem("gemma-model");
     if (saved) return saved;
   } catch {
-    /* unavailable or blocked local storage */
+    /* non-browser or blocked storage */
   }
   return DEFAULT_GEMMA_MODEL;
 }
@@ -126,266 +125,6 @@ Rules:
 - Dutch dates: day-month-year. 04-03-2026 = 4 March 2026.
 - Dutch amounts: 1.452,00 = 1452.00. Output plain numbers with '.' decimals.
 - Use null for anything not visible or ambiguous. Never invent values.`;
-
-/**
- * Coerces a model-emitted amount to a number. Models mostly return plain
- * numbers, but when they echo the printed text ("3.250,00", "€ 276,25") we
- * must read it the way the document does. Delegates to the shared money parser
- * so the VLM path, the OCR path, and the template path agree on one format.
- */
-export function toNum(v: unknown): number | null {
-  if (typeof v === "number") return Number.isFinite(v) ? v : null;
-  if (typeof v === "string") {
-    const n = moneyToNumber(v);
-    return n !== undefined && Number.isFinite(n) ? n : null;
-  }
-  return null;
-}
-
-const gemmaPageSchema = z.object({
-  vendor: z.string().nullable().catch(null),
-  address: z.string().nullable().catch(null),
-  vendorEmail: z.string().email().nullable().catch(null),
-  iban: z.string().nullable().catch(null),
-  vatNumber: z.string().nullable().catch(null),
-  businessRegistrationNumber: z.string().nullable().catch(null),
-  invoiceNumber: z
-    .unknown()
-    .transform((v) => (typeof v === "string" ? v : v == null ? null : String(v)))
-    .pipe(z.string().nullable().catch(null)),
-  issueDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .nullable()
-    .catch(null),
-  dueDate: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .nullable()
-    .catch(null),
-  subtotal: z.unknown().transform(toNum),
-  tax: z.unknown().transform(toNum),
-  total: z.unknown().transform(toNum),
-  currency: z.string().nullable().catch(null),
-  lineItems: z
-    .array(
-      z.object({
-        description: z.unknown(),
-        quantity: z.unknown(),
-        unitPrice: z.unknown(),
-        amount: z.unknown(),
-      }),
-    )
-    .catch([]),
-});
-
-export type GemmaPage = z.infer<typeof gemmaPageSchema>;
-
-/** Strips markdown fences and leading/trailing prose around the JSON payload. */
-export function cleanModelJson(raw: string): string {
-  let s = raw
-    .trim()
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/\s*```$/, "");
-  const start = s.indexOf("{");
-  const end = s.lastIndexOf("}");
-  if (start >= 0 && end > start) s = s.slice(start, end + 1);
-  return s;
-}
-
-export function parseGemmaPage(raw: string): GemmaPage | null {
-  try {
-    const parsed = gemmaPageSchema.safeParse(JSON.parse(cleanModelJson(raw)));
-    return parsed.success ? parsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
-export type MergedGemma = {
-  vendor: { value: string; page: number } | undefined;
-  address: { value: string; page: number } | undefined;
-  vendorEmail: { value: string; page: number } | undefined;
-  iban: { value: string; page: number } | undefined;
-  vatNumber: { value: string; page: number } | undefined;
-  /** Every valid VAT candidate observed by the VLM, before arbitration. */
-  vatCandidates: VatCandidate[];
-  businessRegistrationNumber: { value: string; page: number } | undefined;
-  invoiceNumber: { value: string; page: number } | undefined;
-  issueDate: { value: string; page: number } | undefined;
-  dueDate: { value: string; page: number } | undefined;
-  subtotal: { value: number; page: number } | undefined;
-  tax: { value: number; page: number } | undefined;
-  total: { value: number; page: number } | undefined;
-  currency: string | undefined;
-  lineItems: LineItem[];
-  /** Raw OCR text joined across all vision pages — used to derive the due date
-   *  from payment terms when the VLM returned an empty dueDate. */
-  pagesText: string;
-};
-
-/** First non-null value per field wins, except VAT which is arbitrated across
- *  all page candidates using supplier page anchors. Line items concatenate
- *  across pages. `pagesText` is the raw OCR text joined across all vision pages
- *  — passed through so `gemmaToFields` can derive the due date from payment
- *  terms when the VLM returned an empty `dueDate`. */
-export function mergeGemmaPages(
-  results: (GemmaPage | null)[],
-  pagesText = "",
-): MergedGemma {
-  const merged: MergedGemma = {
-    vendor: undefined,
-    address: undefined,
-    vendorEmail: undefined,
-    iban: undefined,
-    vatNumber: undefined,
-    vatCandidates: [],
-    businessRegistrationNumber: undefined,
-    invoiceNumber: undefined,
-    issueDate: undefined,
-    dueDate: undefined,
-    subtotal: undefined,
-    tax: undefined,
-    total: undefined,
-    currency: undefined,
-    lineItems: [],
-    pagesText,
-  };
-  results.forEach((r, i) => {
-    if (!r) return;
-    const page = i + 1;
-    if (!merged.vendor && r.vendor) merged.vendor = { value: r.vendor, page };
-    if (!merged.address && r.address) merged.address = { value: r.address, page };
-    if (!merged.vendorEmail && r.vendorEmail) merged.vendorEmail = { value: r.vendorEmail, page };
-    if (!merged.iban && r.iban) merged.iban = { value: r.iban, page };
-    if (!merged.vatNumber && r.vatNumber) merged.vatNumber = { value: r.vatNumber, page };
-    if (r.vatNumber) {
-      const pageCandidates = collectVatCandidates(r.vatNumber).map((candidate) => ({
-        ...candidate,
-        index: (page - 1) * 100000 + candidate.index,
-        page,
-        labelled: true,
-      }));
-      for (const candidate of pageCandidates) {
-        if (!merged.vatCandidates.some((existing) => existing.page === candidate.page && existing.value === candidate.value))
-          merged.vatCandidates.push(candidate);
-      }
-    }
-    if (!merged.businessRegistrationNumber && r.businessRegistrationNumber)
-      merged.businessRegistrationNumber = { value: r.businessRegistrationNumber, page };
-    if (!merged.invoiceNumber && r.invoiceNumber)
-      merged.invoiceNumber = { value: r.invoiceNumber, page };
-    if (!merged.issueDate && r.issueDate) merged.issueDate = { value: r.issueDate, page };
-    if (!merged.dueDate && r.dueDate) merged.dueDate = { value: r.dueDate, page };
-    if (!merged.subtotal && r.subtotal != null) merged.subtotal = { value: r.subtotal, page };
-    if (!merged.tax && r.tax != null) merged.tax = { value: r.tax, page };
-    if (!merged.total && r.total != null) merged.total = { value: r.total, page };
-    if (!merged.currency && r.currency) merged.currency = r.currency;
-    for (const li of r.lineItems) {
-      if (merged.lineItems.length >= 20) break;
-      const description = (typeof li.description === "string" ? li.description : "").slice(0, 80);
-      const amount = toNum(li.amount) ?? 0;
-      if (!description || !(amount > 0)) continue;
-      const quantity = toNum(li.quantity) ?? 1;
-      const unitPrice = toNum(li.unitPrice) ?? (quantity > 0 ? amount / quantity : amount);
-      merged.lineItems.push({
-        id: uid(),
-        description,
-        quantity,
-        unitPrice: Number(unitPrice.toFixed(2)),
-        amount,
-        glAccount: GL_ACCOUNTS[0]!,
-        department: DEPARTMENTS[0]!,
-        page,
-      });
-    }
-  });
-  if (merged.vatCandidates.length > 0) {
-    const selected = resolveSupplierVatNumber(merged.vatCandidates, {
-      text: "",
-      vendorEmail: merged.vendorEmail?.value,
-      vendorEmailPage: merged.vendorEmail?.page,
-      vendorIban: merged.iban?.value,
-      vendorIbanPage: merged.iban?.page,
-      businessRegistrationNumber: merged.businessRegistrationNumber?.value,
-      businessRegistrationPage: merged.businessRegistrationNumber?.page,
-    });
-    if (selected) {
-      merged.vatNumber = {
-        value: selected.value,
-        page: selected.page ?? merged.vatNumber?.page ?? 1,
-      };
-    }
-  }
-  return { ...merged, pagesText };
-}
-
-/** VLM reads — every field it found gets provenance "read".
- * The due date computed from payment terms gets "derived". */
-export function gemmaToFields(merged: MergedGemma): ExtractedFields {
-  const prov = (found: boolean): Provenance => (found ? "read" : "derived");
-
-  const fieldSources: Partial<Record<ExtractedField, number>> = {};
-  if (merged.vendor) fieldSources.vendor = merged.vendor.page;
-  if (merged.address) fieldSources.address = merged.address.page;
-  if (merged.vendorEmail) fieldSources.vendorEmail = merged.vendorEmail.page;
-  if (merged.iban) fieldSources.iban = merged.iban.page;
-  if (merged.vatNumber) fieldSources.vatNumber = merged.vatNumber.page;
-  if (merged.businessRegistrationNumber)
-    fieldSources.businessRegistrationNumber = merged.businessRegistrationNumber.page;
-  if (merged.invoiceNumber) fieldSources.invoiceNumber = merged.invoiceNumber.page;
-  if (merged.issueDate) fieldSources.issueDate = merged.issueDate.page;
-  if (merged.dueDate) fieldSources.dueDate = merged.dueDate.page;
-  if (merged.subtotal) fieldSources.subtotal = merged.subtotal.page;
-  if (merged.tax) fieldSources.tax = merged.tax.page;
-  if (merged.total) fieldSources.total = merged.total.page;
-
-  const documentText = merged.pagesText;
-  const issueDateStr =
-    typeof merged.issueDate?.value === "string"
-      ? merged.issueDate.value
-      : undefined;
-  const dueDateFromTerms =
-    !merged.dueDate && issueDateStr
-      ? dueDateFromPaymentTerms(documentText, issueDateStr)
-      : undefined;
-
-  if (dueDateFromTerms) {
-    delete fieldSources.dueDate;
-  }
-
-  return {
-    vendor: merged.vendor?.value,
-    address: merged.address?.value,
-    vendorEmail: merged.vendorEmail?.value,
-    iban: merged.iban?.value,
-    vatNumber: merged.vatNumber?.value,
-    businessRegistrationNumber: merged.businessRegistrationNumber?.value,
-    invoiceNumber: merged.invoiceNumber?.value,
-    issueDate: merged.issueDate?.value,
-    dueDate: merged.dueDate?.value ?? dueDateFromTerms ?? undefined,
-    subtotal: merged.subtotal?.value,
-    tax: merged.tax?.value,
-    total: merged.total?.value,
-    lineItems: merged.lineItems,
-    currency: merged.currency,
-    provenance: {
-      vendor: prov(!!merged.vendor),
-      address: prov(!!merged.address),
-      vendorEmail: prov(!!merged.vendorEmail),
-      iban: prov(!!merged.iban),
-      vatNumber: prov(!!merged.vatNumber),
-      businessRegistrationNumber: prov(!!merged.businessRegistrationNumber),
-      invoiceNumber: prov(!!merged.invoiceNumber),
-      issueDate: prov(!!merged.issueDate),
-      dueDate: merged.dueDate ? "read" : dueDateFromTerms ? "derived" : "derived",
-      subtotal: prov(!!merged.subtotal),
-      tax: prov(!!merged.tax),
-      total: prov(!!merged.total),
-    },
-    fieldSources,
-  };
-}
 
 async function postJson(url: string, body: unknown, timeoutMs: number): Promise<Response> {
   return fetch(url, {
@@ -493,23 +232,16 @@ async function probeGemmaHealthy(): Promise<boolean> {
   return false;
 }
 
-export type GemmaProgress = { stage: string; progress: number; page?: number; totalPages?: number };
-
-export type VisionPageResult = {
-  page: GemmaPage | null;
-  model: string | undefined;
-};
-
 /**
  * Sends one page image to each model in order; first parseable result wins.
  * Returns the winning model name so callers can audit accurately.
  */
-export async function extractPageWithVision(
+async function extractPageWithVision(
   imageB64: string,
   page: number,
   totalPages: number,
   models: string[],
-  onProgress?: (p: GemmaProgress) => void,
+  onProgress?: (progress: VisionProgress) => void,
   onToken?: (text: string) => void,
 ): Promise<VisionPageResult> {
   for (const [i, model] of models.entries()) {
@@ -534,7 +266,7 @@ export async function extractPageWithVision(
       );
       if (!r.ok) continue;
       const content = await readJsonStream(r, onToken);
-      const parsed = content ? parseGemmaPage(content) : null;
+      const parsed = content ? parseVisionPage(content) : null;
       if (parsed) return { page: parsed, model };
     } catch {
       /* try next model */
@@ -573,3 +305,26 @@ export async function downscaleToJpeg(blob: Blob): Promise<Blob> {
   canvas.width = canvas.height = 0;
   return jpeg ?? blob;
 }
+
+/**
+ * The local Ollama/Gemma adapter, handed to the domain as a `VisionEngine`.
+ * The app registers it from a composition root (`@/lib/app/vision-runtime`);
+ * until that runs — a unit test, a CLI harness that forgot to wire it — the
+ * pipeline simply reads text and never asks a model.
+ */
+export const gemmaVisionEngine: VisionEngine = {
+  id: "gemma",
+  modelName: gemmaModel,
+  modelOrder: imageExtractModelOrder,
+  healthy: gemmaHealthy,
+  encodePageImage: async (image) => blobToBase64(await downscaleToJpeg(image)),
+  extractPage: ({ imageB64, page, totalPages, onProgress, onToken }) =>
+    extractPageWithVision(
+      imageB64,
+      page,
+      totalPages,
+      imageExtractModelOrder(),
+      onProgress,
+      onToken,
+    ),
+};

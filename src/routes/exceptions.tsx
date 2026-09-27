@@ -2,7 +2,9 @@
  * Exception queue (Phase Flow Plan §5.1 rule 3, §6).
  *
  * First-class triage screen, not a hidden filter: sync failures, flagged
- * duplicates, and held invoices land here with retry/resolution actions.
+ * duplicates, and held invoices land here with retry/resolution actions —
+ * and so do invoices that depart from what their vendor normally sends, each
+ * with the numbers behind the flag.
  */
 import { useMemo } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
@@ -12,9 +14,16 @@ import { Button } from "@/components/ui/button";
 import { Shell } from "@/components/ap/shell";
 import { EmptyState } from "@/components/ap/primitives";
 import { PageHeader } from "@/components/ap/page-header";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import { money, shortDate, type Invoice } from "@/lib/ap/types";
 import { attemptSync, latestSyncByInvoice, type SyncEvent } from "@/lib/ap/erp-sync";
+import { attentionForInvoice, type InvoiceAttention } from "@/lib/ap/attention";
+import {
+  scanVendorAnomalies,
+  ANOMALY_SEVERITY_ORDER,
+  type AnomalySeverity,
+} from "@/lib/ap/anomalies";
+import { matchNoPoInvoice } from "@/lib/ap/flex-matching";
 
 export const Route = createFileRoute("/exceptions")({
   head: () => ({
@@ -30,54 +39,81 @@ export const Route = createFileRoute("/exceptions")({
   component: ExceptionQueue,
 });
 
-type ExceptionKind = "sync_failed" | "held" | "no_po";
-
 type ExceptionItem = {
-  kind: ExceptionKind;
+  key: string;
   invoice: Invoice;
+  /** The attention kind, or the anomaly kind that produced the row. */
+  kind: string;
+  severity: AnomalySeverity;
+  label: string;
   detail: string;
+  /** Present only when the row is a retryable ERP sync failure. */
   syncEvent?: SyncEvent | undefined;
 };
 
-const KIND_LABEL: Record<ExceptionKind, string> = {
-  sync_failed: "Sync failed",
-  held: "Invoice held",
-  no_po: "No PO linked",
+/** Technical failures first: they are the ones with a button to push. */
+const EXCEPTION_RANK: Record<string, number> = { sync_failed: 0, held: 1, no_po: 2 };
+
+const ATTENTION_SEVERITY: Record<InvoiceAttention["kind"], AnomalySeverity> = {
+  sync_failed: "high",
+  held: "warn",
+  no_po: "warn",
 };
 
 function ExceptionQueue() {
-  const { invoices, history } = useAp();
+  const { invoices, history, removed, vendorProfiles, flexRules, flexContracts, flexReceipts } =
+    useAp();
 
   const items = useMemo<ExceptionItem[]>(() => {
     const syncMap = latestSyncByInvoice();
     const out: ExceptionItem[] = [];
     for (const inv of [...invoices, ...history]) {
-      const ev = syncMap[inv.id];
-      if (ev?.status === "failed") {
+      const attention = attentionForInvoice(
+        inv,
+        syncMap[inv.id],
+        matchNoPoInvoice(inv, {
+          contracts: flexContracts,
+          receipts: flexReceipts,
+          rules: flexRules,
+        }),
+      );
+      if (attention) {
         out.push({
-          kind: "sync_failed",
+          key: `${attention.kind}-${inv.id}`,
           invoice: inv,
-          detail:
-            ev.error ?? "The sync failed without a reason — retry it, then report the problem.",
-          syncEvent: ev,
-        });
-      } else if (inv.memo.includes("held:")) {
-        out.push({
-          kind: "held",
-          invoice: inv,
-          detail: inv.memo.split("held:")[1]?.trim() ?? "Held",
-        });
-      } else if (inv.status === "review" && !inv.poId && inv.lineItems.length > 0) {
-        out.push({
-          kind: "no_po",
-          invoice: inv,
-          detail: "Approved-for-review invoice has no linked purchase order.",
+          kind: attention.kind,
+          severity: ATTENTION_SEVERITY[attention.kind],
+          label: attention.label,
+          detail: attention.detail,
+          syncEvent: attention.syncEvent,
         });
       }
     }
-    const kindOrder: Record<ExceptionKind, number> = { sync_failed: 0, held: 1, no_po: 2 };
-    return out.sort((a, b) => kindOrder[a.kind] - kindOrder[b.kind]);
-  }, [invoices, history]);
+    // Anomalies are measured against every record on file — completed and
+    // removed invoices still teach the vendor's habits — but only the open
+    // ones are worth somebody's time today.
+    for (const finding of scanVendorAnomalies(
+      invoices,
+      [...invoices, ...history, ...removed],
+      vendorProfiles,
+    )) {
+      const invoice = invoices.find((candidate) => candidate.id === finding.invoiceId);
+      if (!invoice) continue;
+      out.push({
+        key: `anomaly-${finding.kind}-${invoice.id}`,
+        invoice,
+        kind: finding.kind,
+        severity: finding.severity,
+        label: finding.label,
+        detail: finding.detail,
+      });
+    }
+    return out.sort(
+      (a, b) =>
+        (EXCEPTION_RANK[a.kind] ?? 3) - (EXCEPTION_RANK[b.kind] ?? 3) ||
+        ANOMALY_SEVERITY_ORDER[a.severity] - ANOMALY_SEVERITY_ORDER[b.severity],
+    );
+  }, [invoices, history, removed, vendorProfiles, flexContracts, flexReceipts, flexRules]);
 
   const retrySync = (item: ExceptionItem) => {
     const event = attemptSync(item.invoice, item.syncEvent?.kind ?? "bill");
@@ -94,6 +130,7 @@ function ExceptionQueue() {
     sync_failed: items.filter((i) => i.kind === "sync_failed").length,
     held: items.filter((i) => i.kind === "held").length,
     no_po: items.filter((i) => i.kind === "no_po").length,
+    anomalies: items.filter((i) => EXCEPTION_RANK[i.kind] === undefined).length,
   };
 
   return (
@@ -105,7 +142,7 @@ function ExceptionQueue() {
         // the list's own business (the kind badges carry the counts). Saying
         // "nothing needs your judgment" here *and* in the empty state below was
         // one sentence twice on the same screen.
-        subtitle="Failed syncs, held invoices and invoices without a purchase order — each with its next action."
+        subtitle="Failed syncs, held invoices, invoices without a purchase order, and invoices that depart from their vendor's normal pattern."
         actions={
           items.length > 0 && (
             <div className="flex gap-2 text-xs">
@@ -124,6 +161,11 @@ function ExceptionQueue() {
                   No PO ({counts.no_po})
                 </span>
               )}
+              {counts.anomalies > 0 && (
+                <span className="rounded-full bg-sidebar px-4 py-2 font-medium text-white">
+                  Vendor pattern ({counts.anomalies})
+                </span>
+              )}
             </div>
           )
         }
@@ -134,15 +176,18 @@ function ExceptionQueue() {
           The pipeline is clean. Failed syncs and held invoices will appear here with a next action.
         </EmptyState>
       ) : (
-        <div className="mt-5 overflow-hidden rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
+        <div className="mt-5 overflow-hidden rounded-lg bg-card shadow-whisper">
           <div className="divide-y divide-border">
             {items.map((item) => (
-              <div
-                key={`${item.kind}-${item.invoice.id}`}
-                className="flex flex-wrap items-center gap-3 px-4 py-3"
-              >
+              <div key={item.key} className="flex flex-wrap items-center gap-3 px-4 py-3">
                 <AlertTriangle
-                  className={`size-4 shrink-0 ${item.kind === "sync_failed" ? "text-destructive" : "text-warning-foreground"}`}
+                  className={`size-4 shrink-0 ${
+                    item.severity === "high"
+                      ? "text-destructive"
+                      : item.severity === "warn"
+                        ? "text-warning-foreground"
+                        : "text-muted-foreground"
+                  }`}
                 />
                 <div className="min-w-0 flex-1">
                   <p className="text-sm font-medium tracking-tight">
@@ -151,7 +196,7 @@ function ExceptionQueue() {
                       {item.invoice.invoiceNumber || "—"}
                     </span>
                     <span className="ml-2 rounded bg-muted px-1.5 py-0.5 align-middle text-xs font-medium text-muted-foreground">
-                      {KIND_LABEL[item.kind]}
+                      {item.label}
                     </span>
                   </p>
                   <p className="mt-0.5 text-xs text-muted-foreground">{item.detail}</p>

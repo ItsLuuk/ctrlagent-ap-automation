@@ -3,11 +3,12 @@
  * upload jobs, opens a small tray with per-job status when clicked, and
  * surfaces retries for failed jobs.
  */
-import { Link } from "@tanstack/react-router";
-import { AlertTriangle, ChevronDown, Loader2, RotateCcw } from "@/components/icons";
+import { Link, useNavigate } from "@tanstack/react-router";
+import { AlertTriangle, ChevronDown, Loader2, PenLine, RotateCcw } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { useState } from "react";
 import { toast } from "sonner";
-import { useUploadJobs } from "@/lib/ap/upload-jobs";
+import { useUploadJobs } from "@/lib/app/upload-jobs";
 import { stageLabel, type ProcessingState } from "@/lib/ap/types";
 import { processingStageLabel } from "@/lib/ap/processing-errors";
 
@@ -36,7 +37,7 @@ export function ProcessingBadge() {
         />
       </button>
       {open ? (
-        <div className="absolute bottom-full right-0 z-40 mb-2 w-80 rounded-xl border border-border bg-card p-2">
+        <div className="absolute bottom-full right-0 z-40 mb-2 w-80 rounded-xl bg-card p-2 shadow-whisper">
           {active.length > 0 ? (
             <div className="space-y-1">
               <p className="px-3 pb-1 text-xs font-medium  text-muted-foreground">Running</p>
@@ -112,7 +113,7 @@ function ProcessingRow({
   );
 }
 
-function FailedRow({
+export function FailedRow({
   invoiceId,
   label,
   state,
@@ -125,6 +126,7 @@ function FailedRow({
   onRetry: () => void;
   onReport: () => void;
 }) {
+  const navigate = useNavigate();
   return (
     <div className="flex items-start justify-between gap-2 rounded-sm border border-warning/30 bg-warning/10 px-3 py-1.5">
       <div className="min-w-0">
@@ -148,13 +150,14 @@ function FailedRow({
         >
           <RotateCcw className="size-3" /> Retry
         </button>
-        <Link
-          to="/invoices/$id"
-          params={{ id: invoiceId }}
-          className="rounded-sm border border-border bg-card px-1.5 py-0.5 text-xs font-medium hover:bg-secondary"
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={() => navigate({ to: "/invoices/$id", params: { id: invoiceId } })}
+          className="gap-1.5 bg-foreground text-background hover:bg-foreground/90"
         >
-          Review manually
-        </Link>
+          <PenLine className="size-3.5" /> Review manually
+        </Button>
         <button
           type="button"
           onClick={onReport}

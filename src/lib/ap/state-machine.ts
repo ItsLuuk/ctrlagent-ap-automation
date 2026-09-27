@@ -16,13 +16,14 @@
  *    that keeps the original record intact.
  */
 import { uid, type AuditEntry, type Invoice, type InvoiceStatus } from "./types";
+import { appendAudit } from "./audit-evidence";
+import { DEFAULT_SOD_POLICY, type SodPolicy, type SodRuleId } from "./sod";
 
 /** Roles from the plan §0 table. A user may hold several; SoD is enforced per invoice. */
 export type ActorRole = "processor" | "approver" | "treasury" | "system";
 
 export type Actor = {
-  /** Who is acting. The one operator on an install signs with their own name
-   *  (see ./operator); the machine signs as "system". */
+  /** Display name, e.g. "Luuk Koppen". */
   name: string;
   roles: ActorRole[];
 };
@@ -32,8 +33,8 @@ export const SYSTEM_ACTOR: Actor = { name: "system", roles: ["system"] };
 /** Typed transition ids — the only way the status may change. */
 export type TransitionId =
   | "register-profile" // system-only: invoice detected as a first-time vendor on upload -> vendor_profile
-  | "route-known-vendor" // system-only: vendor already in vendor-master on upload -> draft
   | "vendor-profile-confirmed" // vendor_profile -> draft (processor; writes vendor-master)
+  | "confirm-from-profiling" // vendor_profile -> review (mapper pins identity + fields in one pass)
   | "vendor-profile-rejected" // vendor_profile -> rejected (processor, reason required)
   | "confirm" // draft -> for_approval (processor or auto-verify system)
   | "reject" // draft|for_approval -> rejected (processor/approver, reason required)
@@ -49,8 +50,8 @@ export type TransitionId =
 
 export const TRANSITION_LABEL: Record<TransitionId, string> = {
   "register-profile": "Vendor profile registered",
-  "route-known-vendor": "Vendor matched vendor-master",
   "vendor-profile-confirmed": "Vendor profile saved",
+  "confirm-from-profiling": "Confirmed profile and mapping",
   "vendor-profile-rejected": "Vendor profile rejected",
   confirm: "Confirmed draft",
   reject: "Rejected",
@@ -99,24 +100,22 @@ export const TRANSITIONS: Record<TransitionId, TransitionSpec> = {
     roles: ["system"],
     requiresReason: false,
   },
-  /**
-   * The other capture-time entry point: the extractor recognised a vendor that
-   * is already in vendor-master, so the invoice goes straight to Draft. Both
-   * capture outcomes are system decisions made before a person sees the
-   * record, which is why they are two entry points and not one rule with a
-   * conditional destination — a single `register-profile` call for both dragged
-   * every known vendor's invoice back into registration while its own audit
-   * note claimed it had entered Draft.
-   */
-  "route-known-vendor": {
-    from: [],
-    to: "draft",
-    roles: ["system"],
-    requiresReason: false,
-  },
   "vendor-profile-confirmed": {
     from: ["vendor_profile"],
     to: "draft",
+    roles: ["processor", "system"],
+    requiresReason: false,
+  },
+  /**
+   * The mapper's confirm during Profiling. A first-time vendor used to fill
+   * the profile on one screen and map the invoice on the next; the mapper now
+   * does both, so one confirm ends the stage and the invoice goes straight to
+   * For approval — the same "confirmed" responsibility, the same audit entry,
+   * no Draft hop in between.
+   */
+  "confirm-from-profiling": {
+    from: ["vendor_profile"],
+    to: "review",
     roles: ["processor", "system"],
     requiresReason: false,
   },
@@ -224,6 +223,7 @@ export function patchRefusal(
  */
 const SOD_RESPONSIBILITIES: Partial<Record<TransitionId, SodKey>> = {
   "vendor-profile-confirmed": "confirmed",
+  "confirm-from-profiling": "confirmed",
   confirm: "confirmed",
   approve: "approved",
   release: "released",
@@ -238,6 +238,8 @@ export function sodState(invoice: Pick<Invoice, "audit">): Partial<Record<SodKey
     if (entry.action === TRANSITION_LABEL.confirm) state.confirmed = entry.actor;
     if (entry.action === TRANSITION_LABEL["vendor-profile-confirmed"])
       state.confirmed = entry.actor;
+    if (entry.action === TRANSITION_LABEL["confirm-from-profiling"])
+      state.confirmed = entry.actor;
     if (entry.action === TRANSITION_LABEL.approve) state.approved = entry.actor;
     if (entry.action === TRANSITION_LABEL.release) state.released = entry.actor;
   }
@@ -248,20 +250,15 @@ export type TransitionError =
   | { kind: "illegal"; from: InvoiceStatus; transition: TransitionId }
   | { kind: "role"; roles: ActorRole[]; transition: TransitionId }
   | { kind: "reason-required"; transition: TransitionId }
-  | { kind: "sod"; responsibility: string; actor: string }
+  | { kind: "sod"; responsibility: string; actor: string; rule: SodRuleId }
   | { kind: "immutable"; from: InvoiceStatus; transition: TransitionId };
 
 export type TransitionInput = {
   transition: TransitionId;
   actor: Actor;
   note?: string | undefined;
-  /**
-   * Org has exactly one member: skip name-based SoD (role gates still apply).
-   * `| undefined` is what lets callers forward an optional value
-   * (`soleUser: opts?.soleUser`) — with exactOptionalPropertyTypes a bare
-   * `?: boolean` rejects an explicitly-undefined argument.
-   */
-  soleUser?: boolean | undefined;
+  /** Enabled rules are hard controls. Defaults to all rules on, including single-user installs. */
+  sodPolicy?: SodPolicy | undefined;
 };
 
 export type TransitionResult = {
@@ -310,24 +307,25 @@ export function transition(
   }
 
   const responsibility = SOD_RESPONSIBILITIES[input.transition];
-  if (responsibility && !input.actor.roles.includes("system") && !input.soleUser) {
-    const done = sodState(invoice);
-    // Plan §4.5: extractor ≠ approver ≠ releaser — each SoD responsibility
-    // must be held by a different person. Block when this actor already
-    // performed *any* of the other SoD-relevant steps on this invoice.
-    const conflict = (Object.keys(done) as SodKey[])
-      .filter((k) => k !== responsibility)
-      .some((k) => done[k] === input.actor.name);
-    if (done[responsibility] === input.actor.name || conflict) {
-      return {
-        ok: false,
-        error: {
-          kind: "sod",
-          responsibility: String(responsibility),
-          actor: input.actor.name,
-        },
-      };
-    }
+  const policy = input.sodPolicy ?? DEFAULT_SOD_POLICY;
+  const done = sodState(invoice);
+  let conflictRule: SodRuleId | undefined;
+  if (responsibility === "approved" && policy.extractor_ne_approver) {
+    if (done.confirmed === input.actor.name) conflictRule = "extractor_ne_approver";
+  }
+  if (responsibility === "released" && policy.approver_ne_releaser) {
+    if (done.approved === input.actor.name) conflictRule = "approver_ne_releaser";
+  }
+  // A repeated responsibility is always a conflict. It represents one control
+  // being asserted twice, not an optional split between two configured rules.
+  if (responsibility && done[responsibility] === input.actor.name) {
+    conflictRule ??= responsibility === "approved" ? "extractor_ne_approver" : "approver_ne_releaser";
+  }
+  if (conflictRule && !input.actor.roles.includes("system")) {
+    return {
+      ok: false,
+      error: { kind: "sod", responsibility: String(responsibility), actor: input.actor.name, rule: conflictRule },
+    };
   }
 
   return {
@@ -360,23 +358,6 @@ export function lastDecision(invoice: Pick<Invoice, "audit">): AuditEntry | unde
 }
 
 /**
- * Whether a handoff marker stands for the decision in force.
- *
- * Only markers written *after* that decision count. A record re-opened and
- * approved again has none, even though an older entry in its history still says
- * one was recorded — and quoting that entry is worse than cosmetic: the screen
- * then reports a handoff that never happened and offers no way to mark the real
- * one, so the last step of the flow becomes unreachable.
- */
-export function handoffMarkerInForce(invoice: Pick<Invoice, "audit">): boolean {
-  const decision = lastDecision(invoice);
-  const after = decision ? invoice.audit.lastIndexOf(decision) + 1 : 0;
-  return invoice.audit
-    .slice(after)
-    .some((entry) => entry.action === TRANSITION_LABEL.release);
-}
-
-/**
  * Applies an accepted removal to a record: the machine's new status and audit
  * action, plus the status it came from so it can go back. Pure, like
  * `transition` — the store owns persistence and the queue move, and the tests
@@ -388,21 +369,19 @@ export function archiveRecord(
   applied: Pick<TransitionResult, "status" | "auditAction">,
   note?: string | undefined,
 ): Invoice {
-  return {
-    ...invoice,
-    status: applied.status,
-    archivedFrom: invoice.status,
-    audit: [
-      ...invoice.audit,
-      {
-        id: uid(),
-        at: new Date().toISOString(),
-        actor: actor.name,
-        action: applied.auditAction,
-        note,
-      },
-    ],
-  };
+  return appendAudit(
+    {
+      ...invoice,
+      status: applied.status,
+      archivedFrom: invoice.status,
+    },
+    {
+      actor: actor.name,
+      action: applied.auditAction,
+      note,
+      changes: { status: { before: invoice.status, after: applied.status } },
+    },
+  );
 }
 
 /**
@@ -412,14 +391,17 @@ export function archiveRecord(
  */
 export function restoreRecord(invoice: Invoice, actor: Actor): Invoice {
   const { archivedFrom, ...rest } = invoice;
-  return {
-    ...rest,
-    status: archivedFrom ?? "draft",
-    audit: [
-      ...invoice.audit,
-      { id: uid(), at: new Date().toISOString(), actor: actor.name, action: RESTORE_ACTION },
-    ],
-  };
+  return appendAudit(
+    {
+      ...rest,
+      status: archivedFrom ?? "draft",
+    },
+    {
+      actor: actor.name,
+      action: RESTORE_ACTION,
+      changes: { status: { before: invoice.status, after: archivedFrom ?? "draft" } },
+    },
+  );
 }
 
 /**
@@ -461,9 +443,14 @@ export function describeTransitionError(error: TransitionError): string {
 export function availableTransitions(
   invoice: Pick<Invoice, "status" | "audit">,
   actor: Actor,
-  opts?: { soleUser?: boolean },
+  opts?: { sodPolicy?: SodPolicy | undefined },
 ): TransitionId[] {
   return (Object.keys(TRANSITIONS) as TransitionId[]).filter(
-    (id) => transition(invoice, { transition: id, actor, soleUser: opts?.soleUser }).ok,
+    (id) =>
+      transition(invoice, {
+        transition: id,
+        actor,
+        ...(opts?.sodPolicy !== undefined ? { sodPolicy: opts.sodPolicy } : {}),
+      }).ok,
   );
 }

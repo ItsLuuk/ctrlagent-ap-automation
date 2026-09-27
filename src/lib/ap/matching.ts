@@ -25,6 +25,12 @@ export type ReceiptLine = {
   poLineId: string;
   /** Quantity actually received at the dock. */
   quantityReceived: number;
+  /** When the receipt was recorded; absent on legacy/sample receipts. */
+  receivedAt?: string | undefined;
+  /** Who recorded the receipt. */
+  recordedBy?: string | undefined;
+  /** Manual is the first supported source; ERP/mail adapters can add more later. */
+  source?: "manual" | "erp" | "mail" | undefined;
 };
 
 export type InvoiceLineLike = {
@@ -109,9 +115,13 @@ export function matchInvoiceToPo(
   } = {},
 ): MatchResult {
   const tolerances = options.tolerances ?? DEFAULT_TOLERANCES;
-  const receiptsByPoLine = new Map(
-    (options.receipts ?? []).map((r) => [r.poLineId, r.quantityReceived] as const),
-  );
+  const receiptsByPoLine = new Map<string, number>();
+  for (const receipt of options.receipts ?? []) {
+    receiptsByPoLine.set(
+      receipt.poLineId,
+      (receiptsByPoLine.get(receipt.poLineId) ?? 0) + receipt.quantityReceived,
+    );
+  }
   const explicitLinks = new Map(
     (options.links ?? []).map((l) => [l.invoiceLineId, l.poLineId] as const),
   );

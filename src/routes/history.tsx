@@ -3,7 +3,7 @@ import { ArrowLeft, History } from "@/components/icons";
 import { PageHeader } from "@/components/ap/page-header";
 import { Shell } from "@/components/ap/shell";
 import { StatusBadge } from "@/components/ap/status";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import { money, shortDate } from "@/lib/ap/types";
 
 export const Route = createFileRoute("/history")({
@@ -43,7 +43,7 @@ function HistoryPage() {
         />
       </div>
 
-      <div className="mt-6 rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.06)]">
+      <div className="mt-6 rounded-lg bg-card shadow-whisper">
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs  text-muted-foreground">

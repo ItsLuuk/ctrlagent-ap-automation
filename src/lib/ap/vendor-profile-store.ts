@@ -1,4 +1,4 @@
-/**  
+/**
  * Vendor profile store — one canonical per-vendor document.
  *
  * Consolidates zones, field patterns, and identity aliases (names, IBAN, VAT,
@@ -15,105 +15,69 @@
  * (due-date-from-terms, fieldSources deleted) are never learnable.
  *
  * Vendor-name corrections update identity aliases, not zone specs.
- *
- * Also persists the legacy VendorTemplate projection (zones + embedding +
- * fingerprint) so the template-matching pipeline keeps working while the
- * canonical profile is the system of record.
  */
 
-import type { Invoice, VendorProfile, VendorProfileVersion, VendorTemplate, ZoneField } from "./types";
+import type {
+  AnchorSpec,
+  Invoice,
+  OcrWord,
+  VendorProfile,
+  VendorProfileVersion,
+  VendorTemplate,
+  ZoneField,
+} from "./types";
 import { buildTemplateFromInvoice } from "./ocr";
+import { locateValue, specForLocation, type ValueLocation } from "./mapping";
+import { resolveVendorKey } from "./vendor-master";
+
+// Re-exported so the many callers that already reach for it through the store
+// keep working. The rule itself lives in `vendor-master.ts`, with the domain
+// core: it is a naming rule about a vendor, not a storage detail, and the use
+// cases that count a vendor's track record need it without reaching for
+// persistence.
+export { resolveVendorKey };
 import { fingerprintOf } from "./fingerprint";
 
-const PROFILES_KEY = "ap-automation-vendor-profiles-v1";
-const TEMPLATES_KEY = "ap-automation-vendor-templates-v2";
-const EMBED_KEY = "ap-automation-vendor-embeddings-v1";
+const STORAGE_KEY = "ap-automation-vendor-profiles-v1";
+const TEMPLATE_STORAGE_KEY = "ap-automation-vendor-templates-v2";
+const TEMPLATE_EMBED_KEY = "ap-automation-vendor-embeddings-v1";
 
-type ProfileStore = Record<string, VendorProfile>;
 type TemplateStore = Record<string, VendorTemplate>;
 type EmbedIndex = Record<string, { vendor_key: string; embedding: number[]; fingerprint: string }>;
 
-type Store = ProfileStore;
+type Store = Record<string, VendorProfile>;
+let memoryStore: Store = {};
 
-function readProfiles(): ProfileStore {
-  if (typeof localStorage === "undefined") return {};
+function readStore(): Store {
+  if (typeof localStorage === "undefined") return memoryStore;
   try {
-    const raw = localStorage.getItem(PROFILES_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as ProfileStore;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return memoryStore;
+    const parsed = JSON.parse(raw) as Store;
+    return parsed && typeof parsed === "object" ? parsed : memoryStore;
   } catch {
-    return {};
+    return memoryStore;
   }
 }
 
-function writeProfiles(store: ProfileStore): void {
+function writeStore(store: Store): void {
+  memoryStore = store;
   if (typeof localStorage === "undefined") return;
   try {
-    localStorage.setItem(PROFILES_KEY, JSON.stringify(store));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   } catch {
     /* storage full or unavailable */
   }
-}
-
-function readTemplateStore(): TemplateStore {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(TEMPLATES_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as TemplateStore;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeTemplateStore(store: TemplateStore): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(TEMPLATES_KEY, JSON.stringify(store));
-  } catch {
-    /* storage full or unavailable */
-  }
-}
-
-function readEmbedIndex(): EmbedIndex {
-  if (typeof localStorage === "undefined") return {};
-  try {
-    const raw = localStorage.getItem(EMBED_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as EmbedIndex;
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function writeEmbedIndex(index: EmbedIndex): void {
-  if (typeof localStorage === "undefined") return;
-  try {
-    localStorage.setItem(EMBED_KEY, JSON.stringify(index));
-  } catch {
-    /* ignore */
-  }
-}
-
-/** Resolves the canonical vendor key for an invoice (identity resolution). */
-export function resolveVendorKey(invoice: Invoice): string {
-  // UBL supplies exact identity (BT-1/BT-2); everything else is fuzzy.
-  // For now, use the invoice's vendor name as the key. In the future this
-  // could resolve through aliases (IBAN/VAT/KvK) to a canonical name.
-  return invoice.vendor.toLowerCase().trim();
 }
 
 /** Reads all profiles — exposed for the vendor profile UI / debug surface. */
-export function readAllProfiles(): ProfileStore {
-  return readProfiles();
+export function readAllProfiles(): Store {
+  return readStore();
 }
 
 /** Wipes everything (used by clear-all-data in the store). */
 export function clearProfiles(): void {
-  writeProfiles({});
+  writeStore({});
   clearTemplates();
 }
 
@@ -132,13 +96,12 @@ export function autoLearnProfile(invoice: Invoice): VendorProfile | undefined {
   const learned = buildTemplateFromInvoice(invoice);
   if (!learned) return undefined;
   const vendorKey = resolveVendorKey(invoice);
-  const store = readProfiles();
+  const store = readStore();
   const prev = store[vendorKey];
   const profile: VendorProfile = {
     vendor_key: vendorKey,
     aliases: prev?.aliases ?? [invoice.vendor],
     fields: learned.fields,
-    line_items: learned.line_items,
     version: (prev?.version ?? 0) + 1,
     origin: "auto",
     updatedAt: new Date().toISOString(),
@@ -158,7 +121,7 @@ export function autoLearnProfile(invoice: Invoice): VendorProfile | undefined {
     ].slice(0, 20); // Cap history at 20 versions
   }
   store[vendorKey] = profile;
-  writeProfiles(store);
+  writeStore(store);
   return profile;
 }
 
@@ -179,7 +142,7 @@ export function confirmProfile(
   corrections: Partial<Record<ZoneField, string | number>>,
 ): VendorProfile | undefined {
   const vendorKey = resolveVendorKey(invoice);
-  const store = readProfiles();
+  const store = readStore();
   const prev = store[vendorKey];
   if (!prev) return undefined;
 
@@ -200,7 +163,8 @@ export function confirmProfile(
   if (correctedFields.size > 0 && invoice.learnPayload) {
     const words = invoice.learnPayload.pages[0]?.words ?? [];
     if (words.length > 0) {
-      for (const field of correctedFields) {
+      for (const rawField of correctedFields) {
+        const field = rawField as ZoneField;
         const correctedValue = corrections[field];
         if (correctedValue === undefined) continue;
         // Try to find the corrected value's zone in learnPayload.
@@ -245,7 +209,7 @@ export function confirmProfile(
     ].slice(0, 20),
   };
   store[vendorKey] = profile;
-  writeProfiles(store);
+  writeStore(store);
   return profile;
 }
 
@@ -254,13 +218,14 @@ export function confirmProfile(
  * correction poisoning a stable profile.
  */
 export function revertProfile(vendorKey: string, targetVersion: number): VendorProfile | undefined {
-  const store = readProfiles();
+  const store = readStore();
   const prev = store[vendorKey];
   if (!prev) return undefined;
   const target = prev.history.find((v) => v.version === targetVersion);
   if (!target) return undefined;
   const profile: VendorProfile = {
     ...prev,
+    version: target.version,
     fields: target.fields,
     line_items: target.line_items,
     origin: target.origin,
@@ -277,153 +242,210 @@ export function revertProfile(vendorKey: string, targetVersion: number): VendorP
     ].slice(0, 20),
   };
   store[vendorKey] = profile;
-  writeProfiles(store);
+  writeStore(store);
   return profile;
 }
 
 /**
- * Derives an AnchorSpec from a corrected value using the same matcher as
- * suggestZone — with money/date normalization so "1.234,56" matches stored
- * 1234.56. Returns undefined when the value can't be anchored (OCR misread —
- * no anchor update helps).
+ * What learning a typed value did, or why it could not. Every branch is a
+ * thing the person has to be told plainly: we found it, we found it twice,
+ * it isn't on the page, or there is no label to remember it by.
  */
-function deriveSpecFromValue(
-  words: Array<{ text: string; x: number; y: number; w: number; h: number }>,
-  field: ZoneField,
-  value: string | number,
-): VendorProfile["fields"][ZoneField] | undefined {
-  // This is a simplified version of deriveAnchor from ocr.ts that works on
-  // raw word arrays. The full version uses extractVendorBlock and provenance
-  // checks; here we just need the zone geometry.
-  const valueStr = String(value);
-  const needle = valueStr.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-  if (!needle) return undefined;
-
-  // Find the value's word cluster.
-  const valueWords = words.filter((w) => {
-    const hay = w.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-    return hay.includes(needle) || needle.includes(hay);
-  });
-  if (valueWords.length === 0) return undefined;
-
-  // Find the nearest anchor label.
-  const anchorLabels: Record<string, string[]> = {
-    vendor: ["van", "from", "leverancier", "supplier", "afzender", "verkoper"],
-    invoiceNumber: ["factuur", "factuurnummer", "factuurnr", "invoice", "nummer", "no.", "nr."],
-    issueDate: ["factuurdatum", "datum", "date", "invoice date"],
-    dueDate: ["vervaldatum", "betalingsdatum", "te betalen", "due", "due date"],
-    subtotal: ["subtotaal", "subtotal", "netto", "net", "totaal excl"],
-    tax: ["btw", "btw-bedrag", "vat", "tax"],
-    total: ["totaal", "total", "te betalen", "amount due", "total due", "grand total"],
-  };
-  const candidates = anchorLabels[field] ?? [];
-  let anchor: { text: string; x: number; y: number; w: number; h: number } | undefined;
-  for (const cand of candidates) {
-    const needleCand = cand.toLowerCase();
-    for (const w of words) {
-      if (w.text.toLowerCase().includes(needleCand)) {
-        if (!anchor || w.y < anchor.y) anchor = w;
-      }
-    }
-    if (anchor) break;
-  }
-  if (!anchor) anchor = words[0];
-  if (!anchor) return undefined;
-
-  const valueWord = valueWords[0];
-  const x0 = Math.min(anchor.x, valueWord.x);
-  const y0 = Math.min(anchor.y, valueWord.y);
-  const x1 = Math.max(anchor.x + anchor.w, valueWord.x + valueWord.w);
-  const y1 = Math.max(anchor.y + anchor.h, valueWord.y + valueWord.h);
-  const ax = anchor.x;
-  const ay = anchor.y;
-  const aw = anchor.w || 0.05;
-  const ah = anchor.h || 0.05;
-
-  return {
-    anchor: anchor.text,
-    region: {
-      x0: (x0 - ax) / aw,
-      y0: (y0 - ay) / ah,
-      x1: (x1 - ax) / aw,
-      y1: (y1 - ay) / ah,
-    },
-    type:
-      field === "issueDate" || field === "dueDate"
-        ? "date"
-        : field === "subtotal" || field === "tax" || field === "total"
-          ? "decimal"
-          : "string",
-  } as VendorProfile["fields"][ZoneField];
-}
-
-/* ─── Template projection (legacy pipeline compat) ─────────────────── */
-
-/** Threshold above which a template fingerprint counts as the same vendor. */
-export const MATCH_THRESHOLD = 0.82;
-export const MATCH_MARGIN = 0.06;
+export type LearnOutcome =
+  | { status: "learned"; zone: ValueLocation["zone"]; words: ValueLocation["words"] }
+  | { status: "ambiguous"; options: ValueLocation[] }
+  | { status: "absent" }
+  | { status: "no-anchor" }
+  | { status: "no-words" };
 
 /**
- * Picks the best matching template for the given vendor block + embedding.
- * Returns undefined when nothing is close enough, which means we fall back
- * to the VLM path.
+ * Remembers where a value lives on this vendor's invoices.
+ *
+ * The person supplied the value; this finds its text on the page and writes the
+ * template that will read it next time. One match is an answer. Several are
+ * returned as a question. None is remembered as an absence, so the same field
+ * is not asked for again on every future invoice.
  */
-export function findTemplateMatch(input: {
-  vendorBlock: string;
-  embedding: number[];
-}): VendorTemplate | undefined {
-  const idx = readEmbedIndex();
-  const store = readTemplateStore();
-  // Exact fingerprint hit short-circuits cosine.
-  const fp = fingerprintOf(input.vendorBlock);
-  const exact = idx[fp];
-  if (exact) return store[exact.vendor_key];
-  // Otherwise find the highest cosine.
-  let best: { template: VendorTemplate; score: number } | undefined;
-  let secondBest = 0;
-  for (const entry of Object.values(idx)) {
-    const score = cosine(input.embedding, entry.embedding);
-    if (best === undefined || score > best.score) {
-      secondBest = best?.score ?? secondBest;
-      const tpl = store[entry.vendor_key];
-      if (tpl) best = { template: tpl, score };
-    } else if (score > secondBest) {
-      secondBest = score;
-    }
+export function learnFieldFromValue(
+  invoice: Invoice,
+  field: ZoneField,
+  value: string | number,
+  chosen?: ValueLocation,
+): LearnOutcome {
+  const words = invoice.learnPayload?.pages[0]?.words;
+  if (!words || words.length === 0) return { status: "no-words" };
+  const locations = locateValue(words, field, value);
+  if (locations.length === 0) {
+    markFieldAbsent(invoice, field);
+    return { status: "absent" };
   }
-  if (!best) return undefined;
-  if (best.score < MATCH_THRESHOLD || best.score - secondBest < MATCH_MARGIN) return undefined;
-  return best.template;
+  const location = chosen ?? (locations.length === 1 ? locations[0] : undefined);
+  if (!location) return { status: "ambiguous", options: locations };
+  const spec = specForLocation(words, field, location);
+  if (!spec) return { status: "no-anchor" };
+  writeSpec(invoice, field, spec);
+  return { status: "learned", zone: location.zone, words: location.words };
 }
 
-/** Persists a newly-learned template. Bumps the version on existing entries. */
+/**
+ * Records that this vendor does not print this field. The spec is dropped at
+ * the same time: a box for something the page never carries is a box that
+ * fails on every read, and a failing spec is what the absence is replacing.
+ */
+export function markFieldAbsent(invoice: Invoice, field: ZoneField): void {
+  const vendorKey = resolveVendorKey(invoice);
+  const store = readStore();
+  const prev = store[vendorKey];
+  const profile: VendorProfile = {
+    ...(prev ?? emptyProfile(vendorKey, invoice.vendor)),
+    fields: withoutField(prev?.fields, field),
+    absentFields: [...new Set([...(prev?.absentFields ?? []), field])],
+    version: (prev?.version ?? 0) + 1,
+    origin: "reviewed",
+    updatedAt: new Date().toISOString(),
+    history: versionHistory(prev),
+  };
+  store[vendorKey] = profile;
+  writeStore(store);
+}
+
+function emptyProfile(vendorKey: string, vendorName: string): VendorProfile {
+  return {
+    vendor_key: vendorKey,
+    aliases: vendorName ? [vendorName] : [],
+    fields: {},
+    version: 0,
+    origin: "auto",
+    updatedAt: new Date().toISOString(),
+    history: [],
+  };
+}
+
+function withoutField(
+  fields: VendorProfile["fields"] | undefined,
+  field: ZoneField,
+): VendorProfile["fields"] {
+  if (!fields) return {};
+  if (!(field in fields)) return fields;
+  const next = { ...fields };
+  delete next[field];
+  return next;
+}
+
+function versionHistory(prev: VendorProfile | undefined): VendorProfileVersion[] {
+  if (!prev) return [];
+  return [
+    {
+      version: prev.version,
+      fields: prev.fields,
+      absentFields: prev.absentFields,
+      line_items: prev.line_items,
+      origin: prev.origin,
+      updatedAt: prev.updatedAt,
+    },
+    ...prev.history,
+  ].slice(0, 20);
+}
+
+/** Writes one learned spec, clearing any absence recorded for that field. */
+function writeSpec(invoice: Invoice, field: ZoneField, spec: AnchorSpec): void {
+  const vendorKey = resolveVendorKey(invoice);
+  const store = readStore();
+  const prev = store[vendorKey];
+  const profile: VendorProfile = {
+    ...(prev ?? emptyProfile(vendorKey, invoice.vendor)),
+    fields: { ...(prev?.fields ?? {}), [field]: spec },
+    absentFields: (prev?.absentFields ?? []).filter((absent) => absent !== field),
+    version: (prev?.version ?? 0) + 1,
+    origin: "reviewed",
+    updatedAt: new Date().toISOString(),
+    history: versionHistory(prev),
+  };
+  store[vendorKey] = profile;
+  writeStore(store);
+}
+
+/**
+ * Derives an AnchorSpec from a corrected value, using the same field-aware
+ * matcher the "find it on the page" path uses: "14-03-2026" is the date
+ * "2026-03-14" and "1.234,56" is the amount 1234.56.
+ *
+ * Returns undefined when the value cannot be anchored — an OCR misread, or a
+ * page with no label to remember it by. The old spec is then kept as-is: the
+ * loop repairs zone misses, not misreads, and it never invents a box.
+ */
+function deriveSpecFromValue(
+  words: OcrWord[],
+  field: ZoneField,
+  value: string | number,
+): AnchorSpec | undefined {
+  const locations = locateValue(words, field, value);
+  if (locations.length === 0) return undefined;
+  return specForLocation(words, field, locations[0]!);
+}
+
+  // Find the nearest anchor label.
+
+let templateCache: TemplateStore | undefined;
+let embedCache: EmbedIndex | undefined;
+
+function readTemplateStore(): TemplateStore {
+  if (typeof localStorage === "undefined") return templateCache ?? {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEMPLATE_STORAGE_KEY) ?? "{}") as TemplateStore;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function readEmbedIndex(): EmbedIndex {
+  if (typeof localStorage === "undefined") return embedCache ?? {};
+  try {
+    const parsed = JSON.parse(localStorage.getItem(TEMPLATE_EMBED_KEY) ?? "{}") as EmbedIndex;
+    return parsed && typeof parsed === "object" ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function writeJson(key: string, value: unknown): void {
+  if (key === TEMPLATE_STORAGE_KEY) templateCache = value as TemplateStore;
+  if (key === TEMPLATE_EMBED_KEY) embedCache = value as EmbedIndex;
+  if (typeof localStorage === "undefined") return;
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* storage full or unavailable */
+  }
+}
+
+/** Persist the legacy template-shaped projection next to the canonical profile. */
 export function upsertTemplate(template: VendorTemplate): void {
   const store = readTemplateStore();
-  const prev = store[template.vendor_key];
-  store[template.vendor_key] = {
+  const previous = store[template.vendor_key];
+  const next = {
     ...template,
-    version: (prev?.version ?? 0) + 1,
-    updatedAt: new Date().toISOString(),
+    version: Math.max(template.version, (previous?.version ?? 0) + 1),
   };
-  writeTemplateStore(store);
-  const idx = readEmbedIndex();
-  idx[template.vendor_fingerprint] = {
-    vendor_key: template.vendor_key,
-    embedding: template.embedding,
-    fingerprint: template.vendor_fingerprint,
+  store[template.vendor_key] = next;
+  writeJson(TEMPLATE_STORAGE_KEY, store);
+  const index = readEmbedIndex();
+  const fingerprint = next.vendor_fingerprint || fingerprintOf(next.vendor_key);
+  index[fingerprint] = {
+    vendor_key: next.vendor_key,
+    embedding: next.embedding,
+    fingerprint,
   };
-  writeEmbedIndex(idx);
+  writeJson(TEMPLATE_EMBED_KEY, index);
 }
-
-/** Reads the raw store — exposed for the templates UI / debug surface. */
 export function readAllTemplates(): TemplateStore {
   return readTemplateStore();
 }
 
-/** Wipes everything (used by clear-all-data in the store). */
 export function clearTemplates(): void {
-  writeTemplateStore({});
-  writeEmbedIndex({});
+  templateCache = undefined;
+  embedCache = undefined;
+  writeJson(TEMPLATE_STORAGE_KEY, {});
+  writeJson(TEMPLATE_EMBED_KEY, {});
 }
-
-import { cosine } from "./fingerprint";

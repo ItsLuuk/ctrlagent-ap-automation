@@ -4,7 +4,7 @@
  * shows the version being replaced.
  */
 import { Check, Layers } from "@/components/icons";
-import { ZONE_FIELDS, type OcrWord, type VendorTemplate, type ZoneField } from "@/lib/ap/types";
+import { MAPPING_FIELDS, type OcrWord, type VendorTemplate } from "@/lib/ap/types";
 import { buildAnchorSpec, describeMapping } from "@/lib/ap/mapping";
 import type { AssignmentsByField } from "./use-draft-mapping";
 import { Section, SectionHeader, InfoBanner } from "./primitives";
@@ -18,7 +18,7 @@ export function TemplatePreview({
   assignments: AssignmentsByField;
   words: OcrWord[] | undefined;
 }) {
-  const pendingLines = ZONE_FIELDS.filter((field) => assignments[field]).map((field) => {
+  const pendingLines = MAPPING_FIELDS.filter((field) => assignments[field]).map((field) => {
     const assignment = assignments[field]!;
     const spec = buildAnchorSpec(words ?? [], field, assignment.zone, assignment.anchor);
     return describeMapping(field, spec, assignment.zone);

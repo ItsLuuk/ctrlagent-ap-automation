@@ -16,7 +16,8 @@ function stopStaleWindowsProcesses() {
     "    ($_.CommandLine -match 'vite\\.tauri\\.config\\.ts') -or",
     "    ($_.Name -eq 'tauri.exe' -and $_.CommandLine -match '\\sdev(?:\\s|$)') -or",
     "    ($_.CommandLine -match 'bootstrap-tauri-dev\\.ps1') -or",
-    "    ($_.Name -eq 'app.exe' -and ($_.CommandLine -match $rootPattern -or $_.CommandLine -match 'target[\\\\/].*app\\.exe'))",
+    "    (($_.Name -in @('app.exe', 'Foundry.exe') -or $_.MainWindowTitle -match 'Foundry') -and ($_.CommandLine -match $rootPattern -or $_.CommandLine -match 'target[\\\\/].*(app|Foundry)\\.exe' -or $_.MainWindowTitle -match 'Foundry')) -or",
+    "    ($_.Name -in @('ollama.exe', 'llama-server.exe') -and $_.CommandLine -match $rootPattern)",
     "  )",
     "})",
     "$pids = @($processes | ForEach-Object { $_.ProcessId })",
@@ -29,6 +30,8 @@ function stopStaleWindowsProcesses() {
     "    & taskkill.exe /PID $processId /T /F | Out-Null",
     "  }",
     "}",
+    "# Resource copies stay locked briefly after taskkill; wait for Windows to release the bundled Ollama DLLs before Cargo copies them into the build.",
+    "Start-Sleep -Milliseconds 750",
   ].join("\n");
 
   execFileSync("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], {
@@ -69,11 +72,17 @@ if (skipLaunch) {
 
 console.log("Launching the current Tauri development app…");
 const env = { ...process.env };
-if (process.platform === "win32" && existsSync("C:\\msys64\\ucrt64\\bin")) {
-  const toolPath = "C:\\msys64\\ucrt64\\bin";
-  const currentPath = env.Path ?? env.PATH ?? "";
-  env.Path = `${toolPath};${currentPath}`;
-  env.PATH = env.Path;
+if (process.platform === "win32") {
+  // The desktop build uses Rust's GNU target with the matching MSYS2 UCRT64
+  // toolchain. Pin both here so Explorer launches do not inherit the global
+  // MSVC default or resolve MSYS2's Unix `link` instead of the UCRT linker.
+  env.RUSTUP_TOOLCHAIN = "stable-x86_64-pc-windows-gnu";
+  if (existsSync("C:\\msys64\\ucrt64\\bin")) {
+    const toolPath = "C:\\msys64\\ucrt64\\bin";
+    const currentPath = env.Path ?? env.PATH ?? "";
+    env.Path = `${toolPath};${currentPath}`;
+    env.PATH = env.Path;
+  }
 }
 const child = spawn(process.platform === "win32" ? "bun.exe" : "bun", ["run", "tauri:dev"], {
   cwd: root,

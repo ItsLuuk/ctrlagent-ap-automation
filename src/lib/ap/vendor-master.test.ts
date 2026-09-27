@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test";
 import {
+  identityChanges,
   PROFILE_FIELDS,
   PROFILE_ZONE_FIELD,
   REQUIRED_PROFILE_FIELDS,
@@ -192,5 +193,63 @@ describe("PROFILE_ZONE_FIELD", () => {
     for (const key of Object.keys(PROFILE_ZONE_FIELD)) {
       expect(PROFILE_FIELDS).toContain(key);
     }
+  });
+});
+
+describe("identityChanges", () => {
+  const onFile: VendorMaster = {
+    name: "Acme",
+    email: "billing@acme.com",
+    address: "Keileweg 1",
+    iban: "NL91ABNA0417164300",
+    vatNumber: "NL000000000B00",
+    businessRegistrationNumber: "87654321",
+    updatedAt: new Date(0).toISOString(),
+  };
+
+  const kindOf = (
+    current: VendorMaster | undefined,
+    next: VendorMaster,
+    field: string,
+  ): string | undefined =>
+    identityChanges(current, next).find((change) => change.field === field)?.kind;
+
+  it("leaves department out — it is a choice, not something read off the document", () => {
+    const fields = identityChanges(onFile, { ...onFile, department: "Finance" }).map(
+      (change) => change.field,
+    );
+    expect(fields).not.toContain("department");
+    expect(fields).toEqual([
+      "name",
+      "email",
+      "address",
+      "iban",
+      "vatNumber",
+      "businessRegistrationNumber",
+    ]);
+  });
+
+  it("names a value the file has never seen", () => {
+    expect(kindOf(undefined, onFile, "iban")).toBe("new");
+    expect(kindOf(onFile, onFile, "name")).toBe("unchanged");
+  });
+
+  it("calls out a bank detail that would be replaced", () => {
+    const next = { ...onFile, iban: "NL02ABNA0417164300" };
+    expect(kindOf(onFile, next, "iban")).toBe("changed");
+    const change = identityChanges(onFile, next).find((c) => c.field === "iban");
+    expect(change?.onFile).toBe("NL91ABNA0417164300");
+    expect(change?.next).toBe("NL02ABNA0417164300");
+  });
+
+  it("treats a spaced IBAN from the document as the bank detail already on file", () => {
+    const fromDocument = { ...onFile, iban: "NL91 ABNA 0417 1643 00" };
+    expect(kindOf(onFile, fromDocument, "iban")).toBe("unchanged");
+  });
+
+  it("says when confirming would empty a value the file holds", () => {
+    expect(kindOf(onFile, { ...onFile, address: "" }, "address")).toBe("cleared");
+    // Nothing to lose, nothing to say.
+    expect(kindOf(undefined, { ...onFile, address: "" }, "address")).toBe("unchanged");
   });
 });

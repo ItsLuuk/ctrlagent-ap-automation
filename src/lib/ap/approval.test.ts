@@ -16,7 +16,7 @@ import {
 import { matchInvoiceToPo, type PoLine } from "./matching";
 import { validateInvoiceForConfirmation } from "./mapping";
 import type { Invoice, LineItem } from "./types";
-import type { PurchaseOrder } from "./po-store";
+import type { PurchaseOrder } from "./purchase-order";
 import type { VendorMaster } from "./vendor-master";
 
 const line = (id: string, description: string, quantity: number, unitPrice: number): LineItem => ({
@@ -83,7 +83,7 @@ const baseInvoice: Invoice = {
   department: "Engineering",
   memo: "",
   tags: [],
-  provenance: { vendor: "read", invoiceNumber: "read", total: "read" },
+  confidence: { vendor: 0.95, invoiceNumber: 0.9, total: 0.9 },
   audit: [],
   source: "sample",
   createdAt: "2026-09-19T00:00:00Z",
@@ -241,11 +241,86 @@ describe("purchase order lines", () => {
     expect(rows[0]!.detail).toContain("Invoice says 12, PO says 10");
   });
 
+  it("blocks approval for a three-way receipt exception", () => {
+    const invoice = inv({ lineItems: [line("l1", "Widgets", 10, 80), LINES[1]!] });
+    const verdict = buildApprovalVerdict({
+      invoice,
+      vendorRecord: VENDOR,
+      po: PO,
+      match: matchInvoiceToPo(invoice.lineItems, PO.lines, { receipts: [] }),
+    });
+    expect(verdict.canApprove).toBe(false);
+    expect(verdict.checks.find((c) => c.id === "lines:l1")?.severity).toBe("blocking");
+  });
+
   it("says there is nothing to match against without a PO", () => {
     const rows = verdictFor({ poId: undefined }).checks.filter((c) => c.group === "lines");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.id).toBe("lines:no-po");
     expect(rows[0]!.severity).toBe("attention");
+  });
+
+  it("makes a no-PO invoice approval-eligible when a flex policy matches", () => {
+    const invoice = inv({ poId: undefined });
+    const verdict = buildApprovalVerdict({
+      invoice,
+      vendorRecord: VENDOR,
+      match: matchInvoiceToPo(invoice.lineItems, []),
+      flexMatch: {
+        status: "matched",
+        source: "contract",
+        evidenceId: "contract-1",
+        evidenceLabel: "Facilities agreement",
+        explanation: "Matched Facilities agreement.",
+        canAutoApprove: true,
+        blocksApproval: false,
+      },
+    });
+
+    expect(verdict.canApprove).toBe(true);
+    expect(verdict.checks.find((c) => c.id === "lines:no-po")?.severity).toBe("ok");
+    expect(verdict.checks.find((c) => c.id === "commitments:po")).toBeUndefined();
+  });
+
+  it("shows flex approval evidence even when the invoice has no extracted lines", () => {
+    const invoice = inv({ poId: undefined, lineItems: [], subtotal: 0, tax: 0, total: 0 });
+    const verdict = buildApprovalVerdict({
+      invoice,
+      vendorRecord: VENDOR,
+      match: null,
+      flexMatch: {
+        status: "matched",
+        source: "receipt",
+        evidenceId: "receipt-1",
+        evidenceLabel: "Receipt receipt-1",
+        explanation: "Matched a receipt for this vendor, invoice number, and amount.",
+        canAutoApprove: true,
+        blocksApproval: false,
+      },
+    });
+
+    expect(verdict.checks.find((c) => c.id === "lines:no-po")?.severity).toBe("ok");
+  });
+
+  it("blocks a no-PO invoice when its flex policy requires missing evidence", () => {
+    const invoice = inv({ poId: undefined });
+    const verdict = buildApprovalVerdict({
+      invoice,
+      vendorRecord: VENDOR,
+      match: matchInvoiceToPo(invoice.lineItems, []),
+      flexMatch: {
+        status: "exception",
+        source: "rule",
+        evidenceId: "rule-1",
+        evidenceLabel: "Facilities under €1,500",
+        explanation: "Facilities under €1,500 matches, but it requires receipt evidence.",
+        canAutoApprove: false,
+        blocksApproval: true,
+      },
+    });
+
+    expect(verdict.canApprove).toBe(false);
+    expect(verdict.checks.find((c) => c.id === "lines:no-po")?.severity).toBe("blocking");
   });
 
   it("states the missing PO once, not again on the commitment row", () => {

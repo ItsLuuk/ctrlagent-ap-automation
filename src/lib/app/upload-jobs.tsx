@@ -19,15 +19,15 @@ import {
   type ReactNode,
 } from "react";
 import { toast } from "sonner";
-import { runBackgroundJob, type ProcessingSkeleton } from "./ocr";
+import { runBackgroundJob, type ProcessingSkeleton } from "@/lib/ap/ocr";
 import {
   processingFailureReason,
   processingFailureState,
   processingStageLabel,
-} from "./processing-errors";
+} from "@/lib/ap/processing-errors";
 import { useAp } from "./store";
-import { decideInitialStatus } from "./vendor-routing";
-import type { ProcessingState } from "./types";
+import { decideInitialStatus } from "@/lib/ap/vendor-routing";
+import { type Invoice, type ProcessingState } from "@/lib/ap/types";
 
 export type UploadJob = {
   id: string;
@@ -87,7 +87,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
   const runOne = useCallback(
     async (job: UploadJob): Promise<void> => {
       inFlightRef.current += 1;
-      let currentStage: string = job.state.stage;
+      let currentStage = job.state.stage;
       try {
         updateJob(job.id, {
           state: { ...job.state, stage: "ai reading", progress: 0.5, background: true },
@@ -100,11 +100,11 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
             startedAt: job.startedAt,
           },
         });
-        const invoice = await runBackgroundJob(
+        const invoice: Invoice = await runBackgroundJob(
           job.skeleton,
           (p: { stage: string; progress: number }) => {
-            currentStage = p.stage;
             const stage = mapStage(p.stage);
+            currentStage = stage;
             updateJob(job.id, {
               state: { ...job.state, stage, progress: p.progress, background: true },
             });
@@ -135,11 +135,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
         // Audit the system-init decision — the audit trail must show how the
         // invoice arrived at vendor_profile (or why it skipped it).
         applyTransition(job.invoiceId, {
-          // Same two entry points the quick path uses; the vendor-master lookup
-          // above picks which one, so a known vendor is not dragged back into
-          // registration by the shared `register-profile` step.
-          transition:
-            initialStatus === "vendor_profile" ? "register-profile" : "route-known-vendor",
+          transition: "register-profile",
           actor: { name: "system", roles: ["system"] },
           note:
             initialStatus === "vendor_profile"
@@ -149,7 +145,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
         removeJob(job.id);
         toast.success(
           initialStatus === "vendor_profile"
-            ? "New vendor — register the profile"
+            ? "New vendor — pin the profile and the fields"
             : "Invoice ready for review",
           {
             description: invoice.templateDrift
@@ -198,7 +194,7 @@ export function UploadJobsProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [updateInvoice, updateJob, removeJob, applyTransition, vendors],
+    [updateInvoice, updateJob, removeJob],
   );
 
   /** Schedules a job, respecting the concurrency cap. */

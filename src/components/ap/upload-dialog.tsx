@@ -14,13 +14,15 @@ import {
   DialogTrigger,
 } from "@/components/ui/dialog";
 import { Progress } from "@/components/ui/progress";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import { stageLabel, uid, type Invoice } from "@/lib/ap/types";
 import { processingFailureReason, processingFailureState } from "@/lib/ap/processing-errors";
 import { extractQuickPhase } from "@/lib/ap/ocr";
 import { saveFile } from "@/lib/ap/file-store";
-import { useUploadJobs } from "@/lib/ap/upload-jobs";
+import { useUploadJobs } from "@/lib/app/upload-jobs";
 import { decideInitialStatus } from "@/lib/ap/vendor-routing";
+import { checkFileHash } from "@/lib/ap/file-hash";
+import { duplicatePeer } from "@/lib/ap/duplicate-detection";
 
 async function filesFromNativePaths(paths: string[]): Promise<File[]> {
   const files: File[] = [];
@@ -54,7 +56,7 @@ async function filesFromNativePaths(paths: string[]): Promise<File[]> {
 
 /**
  * Upload dialog. Two phases per the upload-flow rework:
- *  1. Quick block (~1-2s per file): preprocess + layout OCR + fingerprint +
+ *  1. Quick block (~1-2s per file): read document text + fingerprint +
  *     template match. For known vendors this returns a finished invoice and we
  *     move on to the next file.
  *  2. For novel vendors, the skeleton is handed to the upload-jobs provider
@@ -75,10 +77,10 @@ async function filesFromNativePaths(paths: string[]): Promise<File[]> {
  * rest skip, so a single dropped PDF becomes one record instead of one per
  * mounted instance: the twin the queue kept flagging as a duplicate was this.
  * The native timestamp is also read by the dialog card, which must ignore the
- * DOM drop event that follows Tauri's native event.
+ * browser drop event that follows Tauri's own.
  */
 let lastNativeDropAt = 0;
-let lastDomDropAt = 0;
+let lastBrowserDropAt = 0;
 
 export function UploadDialog({
   size,
@@ -91,8 +93,10 @@ export function UploadDialog({
     applyTransition,
     templates,
     vendors,
-    businessProfile,
-    findTemplateMatch: lookupTemplate,
+    invoices,
+    history,
+    removed,
+    vendorProfiles,
   } = useAp();
   const { enqueue } = useUploadJobs();
   const inputRef = useRef<HTMLInputElement>(null);
@@ -111,6 +115,27 @@ export function UploadDialog({
   const openRef = useRef(open);
   const busyRef = useRef(busy);
   const handleFilesRef = useRef<((files: File[]) => Promise<void>) | undefined>(undefined);
+  /** Pending duplicate decision: resolves to true when the user chooses "import anyway". */
+  const duplicateDecisionRef = useRef<((importAnyway: boolean) => void) | undefined>(undefined);
+  /** Asks the user whether to import a duplicate file. Resolves to true when they choose "import anyway". */
+  const askDuplicateImport = (fileName: string, existingId: string): Promise<boolean> =>
+    new Promise((resolve) => {
+      duplicateDecisionRef.current = resolve;
+      toast.warning("This file was already uploaded", {
+        description: `${fileName} matches an existing invoice. You can import it anyway or skip it.`,
+        action: {
+          label: "Import anyway",
+          onClick: () => {
+            duplicateDecisionRef.current?.(true);
+            duplicateDecisionRef.current = undefined;
+          },
+        },
+        onAutoClose: () => {
+          duplicateDecisionRef.current?.(false);
+          duplicateDecisionRef.current = undefined;
+        },
+      });
+    });
   useEffect(() => {
     openRef.current = open;
     busyRef.current = busy;
@@ -176,9 +201,27 @@ export function UploadDialog({
               setProgress(Math.max(5, Math.round(p.progress * 100)));
             },
             templatesRef.current,
-            businessProfile,
-            lookupTemplate,
           );
+          // Hash catches byte-identical files; the business key catches
+          // re-printed PDFs and portal re-downloads across prior periods.
+          const knownInvoices = [...invoices, ...history, ...removed];
+          const hashCheck = await checkFileHash(file, knownInvoices);
+          const businessPeer = duplicatePeer(
+            result.invoice as Invoice,
+            knownInvoices,
+            vendorProfiles,
+          );
+          const duplicateId = !hashCheck.ok ? hashCheck.existingId : businessPeer?.id;
+          if (duplicateId) {
+            const shouldImport = await askDuplicateImport(file.name, duplicateId);
+            if (!shouldImport) {
+              continue; // Skip this file entirely
+            }
+            // User chose "import anyway" — stamp the duplicate relationship.
+            // Both branches carry a real Invoice; only the shape they arrived
+            // in differs (skeleton vs finished record).
+            (result.invoice as Invoice).duplicateOf = duplicateId;
+          }
           if (result.kind === "processing") {
             // The skeleton invoice lands in the inbox with a processing row,
             // the header badge tracks the job. The quick phase already ran
@@ -201,11 +244,7 @@ export function UploadDialog({
             const routed: Invoice = { ...invoice, status: initialStatus };
             addInvoice(routed);
             applyTransition(routed.id, {
-              // Two capture-time entry points, one per routing outcome: the
-              // vendor decision above owns which one runs, so a known vendor
-              // lands in Draft instead of being pulled back into registration.
-              transition:
-                initialStatus === "vendor_profile" ? "register-profile" : "route-known-vendor",
+              transition: "register-profile",
               actor: { name: "system", roles: ["system"] },
               note:
                 initialStatus === "vendor_profile"
@@ -235,7 +274,7 @@ export function UploadDialog({
             department: "",
             memo: "",
             tags: [],
-            provenance: {},
+            confidence: {},
             audit: [
               {
                 id: uid(),
@@ -334,9 +373,9 @@ export function UploadDialog({
   handleFilesRef.current = handleFiles;
 
   // Tauri's native window drop event provides filesystem paths rather than
-  // DOM DataTransfer files. Convert those paths into File objects so the
+  // browser DataTransfer files. Convert those paths into File objects so the
   // desktop path uses the exact same extraction, persistence, and navigation
-  // pipeline as the WebView picker and DOM drag/drop path.
+  // pipeline as the web picker and browser drag/drop path.
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     let disposed = false;
@@ -380,9 +419,8 @@ export function UploadDialog({
     };
   }, []);
 
-  // The non-Tauri test harness has no native window drop, so "drop a PDF
-  // anywhere in this window" is wired here — the same gesture the desktop gets
-  // from Tauri above.
+  // The browser has no native window drop, so "drop a PDF anywhere in this
+  // window" is wired here — the same gesture the desktop gets from Tauri above.
   // The dialog card stops propagation on its own drop, so the two cannot both
   // take the same file.
   useEffect(() => {
@@ -399,8 +437,8 @@ export function UploadDialog({
       const dropped = Array.from(e.dataTransfer?.files ?? []);
       if (dropped.length === 0) return;
       // Another instance of this dialog already captured this gesture.
-      if (Date.now() - lastDomDropAt < 1000) return;
-      lastDomDropAt = Date.now();
+      if (Date.now() - lastBrowserDropAt < 1000) return;
+      lastBrowserDropAt = Date.now();
       // A document dropped anywhere is a request to capture it, dialog open or
       // not — same rule as the native path.
       if (!openRef.current) setOpen(true);
@@ -436,7 +474,7 @@ export function UploadDialog({
         department: "",
         memo: "",
         tags: [],
-        provenance: {},
+        confidence: {},
         audit: [
           {
             id: uid(),
@@ -552,13 +590,13 @@ export function UploadDialog({
             }}
             onDrop={(e) => {
               e.preventDefault();
-              // The window listens too (WebView path): one drop, one capture.
+              // The window listens too (browser build): one drop, one capture.
               e.stopPropagation();
               dragDepthRef.current = 0;
               setDragging(false);
-              // Tauri can deliver both its native path event and the WebView
+              // Tauri can deliver both its native path event and the browser
               // drop event. The native event is authoritative; ignore the
-              // WebView duplicate that arrives in the same gesture.
+              // browser duplicate that arrives in the same gesture.
               if (Date.now() - lastNativeDropAt < 1000) return;
               // While a batch is running the drop zone shows progress instead;
               // ignore drops rather than interleaving two loops.

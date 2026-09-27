@@ -2,7 +2,7 @@ import { describe, expect, it } from "bun:test";
 import { parseDateParts, moneyToNumber } from "./zones";
 import { extractFieldsFromPages, MONEY_RE } from "./ocr";
 
-const page = (text: string) => [{ pageNumber: 1, text }];
+const page = (text: string) => [{ pageNumber: 1, text, confidence: 0.95 }];
 
 describe("EU locale-aware parsers", () => {
   it("disambiguates numeric dates using document locale", () => {

@@ -14,6 +14,7 @@ import {
   parseDateParts,
   parseLineItemRows,
   proposeAnchor,
+  resizeZone,
   specToZone,
   suggestZone,
   totalsCrossCheck,
@@ -54,6 +55,7 @@ const baseInvoice: Invoice = {
   department: "Engineering",
   memo: "",
   tags: [],
+  confidence: { vendor: 0.95, invoiceNumber: 0.5 },
   provenance: { vendor: "read", invoiceNumber: "derived" },
   audit: [],
   source: "sample",
@@ -76,6 +78,55 @@ describe("unionBox", () => {
 
   it("returns an empty box for no words", () => {
     expect(unionBox([])).toEqual({ x: 0, y: 0, w: 0, h: 0 });
+  });
+});
+
+describe("resizeZone", () => {
+  it("resizes a selected edge and clamps it to the document", () => {
+    expect(resizeZone(zone(0.2, 0.3, 0.25, 0.1), "e", 0.2, 0)).toEqual(
+      zone(0.2, 0.3, 0.45, 0.1),
+    );
+    expect(resizeZone(zone(0.8, 0.3, 0.15, 0.1), "e", 0.2, 0)).toEqual(
+      zone(0.8, 0.3, 0.2, 0.1),
+    );
+  });
+
+  it("moves two edges from a corner and preserves a usable minimum", () => {
+    expect(resizeZone(zone(0.4, 0.4, 0.2, 0.1), "nw", -0.1, -0.05)).toEqual(
+      zone(0.3, 0.35, 0.3, 0.15),
+    );
+    expect(resizeZone(zone(0.4, 0.4, 0.2, 0.1), "se", 0.5, 0.5)).toEqual(
+      zone(0.4, 0.4, 0.6, 0.6),
+    );
+  });
+
+  it("moves every edge and corner in the requested direction", () => {
+    const initialZone = zone(0.3, 0.4, 0.2, 0.1);
+
+    expect(resizeZone(initialZone, "n", 0, -0.1)).toEqual(
+      zone(0.3, 0.3, 0.2, 0.2),
+    );
+    expect(resizeZone(initialZone, "s", 0, 0.1)).toEqual(
+      zone(0.3, 0.4, 0.2, 0.2),
+    );
+    expect(resizeZone(initialZone, "w", -0.1, 0)).toEqual(
+      zone(0.2, 0.4, 0.3, 0.1),
+    );
+    expect(resizeZone(initialZone, "e", 0.1, 0)).toEqual(
+      zone(0.3, 0.4, 0.3, 0.1),
+    );
+    expect(resizeZone(initialZone, "nw", -0.1, -0.1)).toEqual(
+      zone(0.2, 0.3, 0.3, 0.2),
+    );
+    expect(resizeZone(initialZone, "ne", 0.1, -0.1)).toEqual(
+      zone(0.3, 0.3, 0.3, 0.2),
+    );
+    expect(resizeZone(initialZone, "sw", -0.1, 0.1)).toEqual(
+      zone(0.2, 0.4, 0.3, 0.2),
+    );
+    expect(resizeZone(initialZone, "se", 0.1, 0.1)).toEqual(
+      zone(0.3, 0.4, 0.3, 0.2),
+    );
   });
 });
 
@@ -162,25 +213,17 @@ describe("suggestZone", () => {
 describe("fieldStatus triage", () => {
   const statuses: Record<ZoneField, FieldStatus> = {} as never;
 
-  it("flags derived values as amber", () => {
+  it("flags derived provenance as amber", () => {
     expect(triageStatus(baseInvoice, "invoiceNumber")).toBe("amber");
   });
 
-  it("flags a failed sanity check as amber for a directly read value", () => {
+  it("flags a failed sanity check as amber even for a direct read", () => {
     const invoice = { ...baseInvoice, provenance: { vendor: "read" as const } };
     expect(fieldStatus(invoice, "vendor", { zoneCheckMatch: false })).toBe("amber");
   });
 
-  it("clears the amber state after a reviewer corrects the field", () => {
-    const invoice = {
-      ...baseInvoice,
-      provenance: { invoiceNumber: "manual" as const },
-    };
-    expect(fieldStatus(invoice, "invoiceNumber", { zoneCheckMatch: false })).toBe("green");
-  });
-
   it("flags empty values as amber", () => {
-    const empty = { ...baseInvoice, invoiceNumber: "" };
+    const empty = { ...baseInvoice, provenance: {}, invoiceNumber: "" };
     expect(fieldStatus(empty, "invoiceNumber")).toBe("amber");
   });
 

@@ -7,7 +7,6 @@ import {
   ClipboardPaste,
   MoreVertical,
   Pencil,
-  Save,
   AlertTriangle,
   UserSearch,
 } from "@/components/icons";
@@ -26,7 +25,7 @@ import {
   type ProfileField,
   type VendorMaster,
 } from "@/lib/ap/vendor-master";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import { VendorLogo, vendorEmail } from "./vendor-profile";
 import { Section } from "./primitives";
 
@@ -327,7 +326,7 @@ function IbanField({
           IBAN
           {required ? (
             <>
-              <span aria-hidden className="ml-0.5 text-warning-foreground">
+              <span aria-hidden className="ml-0.5 text-foundry-orange">
                 *
               </span>
               <span className="sr-only"> (required)</span>
@@ -341,14 +340,14 @@ function IbanField({
             </span>
           ) : validity.tone !== "idle" ? (
             <span className="inline-flex items-center gap-1 text-xs font-semibold text-foreground">
-              <AlertTriangle className="size-3 text-warning-foreground" /> Check
+              <AlertTriangle className="size-3 text-foundry-orange" /> Check
             </span>
           ) : null}
           <Button
             type="button"
             size="sm"
             variant="ghost"
-            className="h-7 gap-1 rounded-full px-2 text-xs text-primary"
+            className="h-7 gap-1 rounded-full px-2 text-xs text-foundry-link"
             onClick={pasteFromClipboard}
             title="Paste IBAN from clipboard"
           >
@@ -358,7 +357,7 @@ function IbanField({
       </div>
 
       {/* iOS grouped card — single row: country · check · bank · account */}
-      <div className="rounded-xl border border-border/60 bg-secondary/30 p-2 transition-colors duration-200 ease-out-expo">
+      <div className="rounded-xl bg-secondary/30 p-2 shadow-whisper transition-colors duration-200 ease-out-expo">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Select
             {...(country ? { value: country } : {})}
@@ -437,10 +436,7 @@ function IbanField({
               maxLength={bankLen}
               placeholder={cfg?.bankPlaceholder ?? "RABO"}
               className={`${iosInput} w-full font-mono font-semibold uppercase sm:min-w-0 sm:flex-1`}
-              // Always the segment of the IBAN the field is part of. Blanking it
-              // while custom mode was on left the bank box empty next to a
-              // complete, valid IBAN and a readout that still showed the code.
-              value={bank}
+              value={showCustomBank ? (bankIsListed ? "" : bank) : bank}
               onChange={(e) => {
                 setBankCustom(true);
                 reassemble({ bank: e.target.value });
@@ -500,9 +496,6 @@ function IbanField({
 export function VendorProfileCard({
   vendor,
   onChange,
-  onSave,
-  saveLabel = "Save changes",
-  saving = false,
   focusField,
   onFocusDone,
   requiredFields,
@@ -511,10 +504,6 @@ export function VendorProfileCard({
 }: {
   vendor: VendorMaster;
   onChange: (field: ProfileField, value: string) => void;
-  /** Persist the edited profile. Rendered as the card's primary footer action. */
-  onSave?: (() => void) | undefined;
-  saveLabel?: string | undefined;
-  saving?: boolean | undefined;
   focusField: ProfileField | null;
   onFocusDone: () => void;
   /** Fields the current phase gates on — marked with a required asterisk. */
@@ -527,14 +516,17 @@ export function VendorProfileCard({
   const requiredMark = (field: ProfileField) =>
     required(field) ? (
       <>
-        <span aria-hidden className="ml-0.5 text-warning-foreground">
+        <span aria-hidden className="ml-0.5 text-foundry-orange">
           *
         </span>
         <span className="sr-only"> (required)</span>
       </>
     ) : null;
-  const { vendors } = useAp();
+  const { vendors, vendorProfiles } = useAp();
   const record = vendors[vendor.name];
+  const mappingProfile = vendorProfiles[vendor.name.toLowerCase().trim()];
+  const mappedFieldCount = Object.keys(mappingProfile?.fields ?? {}).length;
+  const hasLineItemMapping = Boolean(mappingProfile?.line_items);
   const isKnown = Boolean(record && (record.email || record.logoUrl));
   const [expanded, setExpanded] = useState(!isKnown);
   const refs = useRef<Partial<Record<ProfileField, HTMLInputElement | null>>>({});
@@ -563,16 +555,17 @@ export function VendorProfileCard({
     return (
       <Section>
         <div className="flex items-center gap-3 px-4 py-3">
-          <VendorLogo
-            vendor={vendor.name}
-            department={vendor.department}
-            className="size-10 text-xs"
-          />
+          <VendorLogo vendor={vendor.name} className="size-10 text-xs" />
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-medium">{vendor.name || "Unknown vendor"}</p>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               {vendorEmail(vendor.name, record)}
             </p>
+            {mappedFieldCount > 0 ? (
+              <p className="mt-1 text-xs text-muted-foreground">
+                Invoice mapping · {mappedFieldCount} fields{hasLineItemMapping ? " + line items" : ""}
+              </p>
+            ) : null}
           </div>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -627,6 +620,18 @@ export function VendorProfileCard({
         onFocusCapture={onFocusCapture}
         onBlurCapture={onBlurCapture}
       >
+        <div className="flex items-center justify-between gap-3 rounded-md bg-muted/30 px-3 py-2">
+          <div className="min-w-0">
+            <p className="text-xs font-medium">Invoice mapping</p>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              {mappedFieldCount > 0
+                ? `${mappedFieldCount} saved field${mappedFieldCount === 1 ? "" : "s"}${hasLineItemMapping ? " and line items" : ""} belong to this vendor profile.`
+                : "No saved mapping yet. Confirm the fields on this invoice to teach this profile."}
+            </p>
+          </div>
+          <ClipboardPaste className="size-4 shrink-0 text-muted-foreground" />
+        </div>
+
         {/* 1 + 2 — name next to email */}
         <div className="grid gap-3 sm:grid-cols-2">
           <label className="block space-y-1.5">
@@ -745,22 +750,6 @@ export function VendorProfileCard({
             />
           </label>
         </div>
-        {onSave && (
-          <div className="flex items-center justify-end border-t border-border px-4 py-3">
-            <Button
-              type="button"
-              size="sm"
-              onClick={() => {
-                onSave();
-                setExpanded(false);
-              }}
-              disabled={saving}
-            >
-              <Save className="size-3.5" />
-              {saving ? "Saving…" : saveLabel}
-            </Button>
-          </div>
-        )}
       </div>
     </Section>
   );

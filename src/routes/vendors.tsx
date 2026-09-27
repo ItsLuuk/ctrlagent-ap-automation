@@ -8,8 +8,8 @@ import { Users } from "@/components/icons";
 import { PageHeader } from "@/components/ap/page-header";
 import { Shell } from "@/components/ap/shell";
 import { EmptyState } from "@/components/ap/primitives";
-import { departmentLogoTone, vendorEmail, initialsOf } from "@/components/ap/vendor-profile";
-import { useAp } from "@/lib/ap/store";
+import { logoTone, vendorEmail, initialsOf } from "@/components/ap/vendor-profile";
+import { useAp } from "@/lib/app/store";
 import { money } from "@/lib/ap/types";
 
 export const Route = createFileRoute("/vendors")({
@@ -74,7 +74,7 @@ function VendorsPage() {
                 key={vendor}
                 to="/"
                 search={{}}
-                className="flex items-center gap-3 rounded-lg border border-border bg-card px-4 py-3 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)] transition-[transform,box-shadow,background-color] hover:-translate-y-0.5 hover:bg-accent/5 hover:shadow-[0_8px_24px_rgba(0,0,0,0.08)]"
+                className="flex items-center gap-3 rounded-lg bg-card px-4 py-3 shadow-whisper transition-colors hover:bg-accent/5"
               >
                 {record?.logoUrl ? (
                   <img
@@ -86,7 +86,7 @@ function VendorsPage() {
                 ) : (
                   <div
                     aria-hidden
-                    className={`flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${departmentLogoTone(record?.department, vendor)}`}
+                    className={`flex size-11 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${logoTone(vendor)}`}
                   >
                     {initialsOf(vendor)}
                   </div>

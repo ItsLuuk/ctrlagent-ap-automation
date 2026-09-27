@@ -14,22 +14,25 @@ import { isImageInvoice } from "@/lib/ap/file-type";
 
 const OCR_METHOD_LABEL: Record<OcrMethod, string> = {
   "text-layer": "digital text",
-  none: "unreadable",
+  none: "page image",
 };
 
 const PAGE_METHOD_LABEL: Record<OcrPageMethod, string> = {
   "text-layer": "digital text",
-  none: "unreadable",
+  none: "page image",
 };
 
 function PageStrip({ invoice }: { invoice: Invoice }) {
   if (!invoice.pageCount) return null;
+  const pages = invoice.ocrPages ?? [];
+  const avg = pages.length ? pages.reduce((s, p) => s + p.confidence, 0) / pages.length : undefined;
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 border-b border-border bg-card px-4 py-2 text-xs text-muted-foreground">
       <span className="font-mono font-medium text-foreground">
         {invoice.pageCount} page{invoice.pageCount === 1 ? "" : "s"}
       </span>
       {invoice.ocrMethod ? <span>· {OCR_METHOD_LABEL[invoice.ocrMethod]}</span> : null}
+      {avg !== undefined ? <span>· {Math.round(avg * 100)}% avg read confidence</span> : null}
     </div>
   );
 }
@@ -119,7 +122,7 @@ export function DocPreview({
         <FileText className="mx-auto size-6 text-muted-foreground" />
         <p className="text-sm font-medium">{invoice.fileName ?? "Uploaded document"}</p>
         <p className="mx-auto max-w-xs text-xs text-muted-foreground">
-          The original file preview is only kept for this app session. Extracted data below is
+          The original file preview is only kept for this browser session. Extracted data below is
           saved.
         </p>
         {multiPage ? (
@@ -127,11 +130,11 @@ export function DocPreview({
             {invoice.ocrPages!.map((p) => (
               <li
                 key={p.pageNumber}
-                className="flex items-center justify-between rounded-sm border border-border bg-card px-3 py-2 text-xs"
+                className="flex items-center justify-between rounded-sm bg-card px-3 py-2 text-xs shadow-whisper"
               >
                 <span className="font-medium">Page {p.pageNumber}</span>
                 <span className="font-mono text-muted-foreground">
-                  {PAGE_METHOD_LABEL[p.method]} · {p.charCount} characters
+                  {PAGE_METHOD_LABEL[p.method]} · {Math.round(p.confidence * 100)}%
                 </span>
               </li>
             ))}

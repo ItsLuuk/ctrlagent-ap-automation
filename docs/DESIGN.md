@@ -66,7 +66,7 @@ Existing product typography and numeric formatting are retained. Monospace, righ
 
 | Screen | What app is this? | Main options | Result |
 |---|---|---|---|
-| Work queue | Invoice operations queue | Needs you, In flight, Later, History | Passes the “where am I?” test, but Later mixes several lifecycle states. |
+| Work queue | Invoice operations queue | Draft, For approval, For payment, History | Passes the “where am I?” test: the tabs are the invoice's lifecycle phases, left to right in the order the work moves. |
 | Invoice review | Compare extracted invoice data and decide | Approve, Query, Reject, Review next issue | Mostly passes; the post-approval next step is not visible before approval. |
 | External handoff | Prepare approved invoices for bookkeeping | Prepare handoff, Export CSV | Fails the “what happens next?” test because the current flow requires returning to the queue for export. |
 

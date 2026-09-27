@@ -2,14 +2,14 @@
  * Extraction eval — runner.
  *
  * Drives each fixture through the *real* deterministic stage of the pipeline
- * it exercises, then scores the result. Desktop-runtime-only stages (canvas
- * preprocessing, Tesseract, the Ollama/llama HTTP call) are out of scope: the
+ * it exercises, then scores the result. Browser-only stages (canvas
+ * page rendering, the Ollama/llama HTTP call) are out of scope: the
  * fixtures carry the OCR text / raw model JSON those stages would have
  * produced, so the parsing and field-mapping code under test is the same code
  * the app runs.
  */
 import { extractFieldsFromPages } from "../ocr";
-import { gemmaToFields, mergeGemmaPages, parseGemmaPage } from "../../ai/gemma";
+import { mergeVisionPages, parseVisionPage, visionPageToFields } from "../vision";
 import { applyTemplateField } from "../template-apply";
 import type { AnchorSpec, ZoneField } from "../types";
 import {
@@ -53,8 +53,8 @@ function predictHeuristic(fixture: HeuristicFixture): FieldValues {
 }
 
 function predictVlm(fixture: VlmFixture): FieldValues {
-  const merged = mergeGemmaPages(fixture.rawPages.map(parseGemmaPage));
-  const fields = gemmaToFields(merged);
+  const merged = mergeVisionPages(fixture.rawPages.map(parseVisionPage));
+  const fields = visionPageToFields(merged);
   return collect({
     vendor: fields.vendor,
     invoiceNumber: fields.invoiceNumber,

@@ -28,14 +28,19 @@ import { fileURLToPath } from "node:url";
 import ts from "typescript";
 
 const AP_DIR = dirname(fileURLToPath(import.meta.url));
+const LIB_DIR = resolve(AP_DIR, "..");
+/** The React store moved out of the domain directory but still persists keys. */
+const APP_DIR = join(LIB_DIR, "app");
 
 /** Every source in the AP lib: the store, and the modules that persist beside it. */
-const SOURCES = readdirSync(AP_DIR, { recursive: true })
-  .filter((name): name is string => typeof name === "string")
-  .filter(
-    (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.includes("fixtures/"),
-  )
-  .map((name) => join(AP_DIR, name));
+const SOURCES = [AP_DIR, APP_DIR].flatMap((dir) =>
+  readdirSync(dir, { recursive: true })
+    .filter((name): name is string => typeof name === "string")
+    .filter(
+      (name) => /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) && !name.includes("fixtures/"),
+    )
+    .map((name) => join(dir, name)),
+);
 
 /** The keys this install persists, and what each one is. Reviewed by hand. */
 const KNOWN_KEYS: Record<string, string> = {
@@ -44,14 +49,24 @@ const KNOWN_KEYS: Record<string, string> = {
   "ap-automation-removed-v1": "records taken out of the queue",
   "ap-automation-templates-v1": "legacy vendor templates (kept in sync)",
   "ap-automation-vendors-v1": "vendor master",
-  "ap-automation-business-profile-v1": "the operator's own profile",
+  "ap-automation-business-profile-v1": "legacy single-entity profile (migrated on boot)",
+  "ap-automation-operator-name-v1": "the workspace operator identity",
   "ap-automation-purchase-orders-v1": "purchase orders",
   "ap-automation-vendor-templates-v2": "learned vendor templates",
   "ap-automation-vendor-embeddings-v1": "vendor fingerprint embeddings",
   "ap-automation-vendor-profiles-v1": "vendor profile store",
   "ap-automation-file-hashes-v1": "uploaded-file hashes (duplicate gate)",
   "ap-automation-sync-events-v1": "ERP sync events",
+  "ap-automation-sod-policy-v1": "configurable segregation-of-duties controls",
+  "ap-automation-vendor-bank-changes-v1": "pending vendor bank-change approvals",
+  "ap-automation-entities-v1": "legal entities (multi-entity registry)",
+  "ap-automation-active-entity-v1": "the entity currently active",
+  "ap-automation-fx-rates-v1": "operator-maintained exchange rates for consolidation",
+  "ap-automation-compliance-pack-v1": "procurement readiness framework and residency selection",
 };
+
+/** Keys intentionally read once for migration and never written by the new source of truth. */
+const READ_ONLY_MIGRATION_KEYS = new Set(["ap-automation-business-profile-v1"]);
 
 /** Reads that go through a helper rather than `localStorage.getItem` directly. */
 const READER_HELPERS = new Set(["readStoredInvoices", "readAllPos", "readAllTemplates"]);
@@ -84,7 +99,7 @@ function parse(file: string): FileFacts {
   const text = readFileSync(file, "utf8");
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const name = file
-    .slice(AP_DIR.length + 1)
+    .slice(LIB_DIR.length + 1)
     .split("\\")
     .join("/");
   const consts = new Map<string, string>();
@@ -211,11 +226,20 @@ describe("persisted keys", () => {
       const writes = writesOf(key);
       expect(
         reads.length,
-        `${key} is written but never read — nothing would survive a reload`,
+        `${key} is persisted but never read — nothing would survive a reload`,
       ).toBeGreaterThan(0);
+      if (READ_ONLY_MIGRATION_KEYS.has(key)) {
+        expect(writes, `${key} is now owned by a canonical store and must not be rewritten`).toEqual(
+          [],
+        );
+        return;
+      }
       // Compare only within a module. Source line numbers across modules do not
       // describe runtime order, while an effect and its reader in one component
-      // do. Every current key has both operations in the same module.
+      // do. Every current key has both operations in the same module — except
+      // a read-only migration source (the legacy profile key, superseded by
+      // the entity registry): with no write anywhere there is no boot order
+      // to lose, so the pairing is required only when the key is written.
       const ordered = facts
         .map((file) => {
           const fileReads = sitesFor(key, file).filter((site) => site.kind === "read");
@@ -223,17 +247,21 @@ describe("persisted keys", () => {
           return { file, fileReads, fileWrites };
         })
         .filter(({ fileReads, fileWrites }) => fileReads.length > 0 && fileWrites.length > 0);
-      expect(
-        ordered.length,
-        `${key} is read and written in different modules; pin their boot order explicitly`,
-      ).toBeGreaterThan(0);
-      for (const { file, fileReads, fileWrites } of ordered) {
-        const firstRead = Math.min(...fileReads.map((site) => site.line));
-        const firstWrite = Math.min(...fileWrites.map((site) => site.line));
+      const writtenSomewhere = readsOf(key).length > 0 &&
+        facts.some((file) => file.sites.some((site) => site.key === key && site.kind === "write"));
+      if (writtenSomewhere) {
         expect(
-          firstRead,
-          `${key} is written at ${firstWrite} before it is read at ${firstRead} in ${file.sites[0]?.file ?? "one module"} — the read happens after the write and loses`,
-        ).toBeLessThan(firstWrite);
+          ordered.length,
+          `${key} is read and written in different modules; pin their boot order explicitly`,
+        ).toBeGreaterThan(0);
+        for (const { file, fileReads, fileWrites } of ordered) {
+          const firstRead = Math.min(...fileReads.map((site) => site.line));
+          const firstWrite = Math.min(...fileWrites.map((site) => site.line));
+          expect(
+            firstRead,
+            `${key} is written at ${firstWrite} before it is read at ${firstRead} in ${file.sites[0]?.file ?? "one module"} — the read happens after the write and loses`,
+          ).toBeLessThan(firstWrite);
+        }
       }
     });
 

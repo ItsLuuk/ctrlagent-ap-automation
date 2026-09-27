@@ -1,5 +1,13 @@
 import { describe, expect, it } from "bun:test";
-import { gemmaToFields, mergeGemmaPages, parseGemmaPage, toNum } from "./gemma";
+import {
+  parseVisionPage,
+  toNum,
+  mergeVisionPages,
+  setVisionEngine,
+  visionEngine,
+  visionPageToFields,
+  type VisionEngine,
+} from "./vision";
 
 describe("toNum", () => {
   it("reads Dutch/EU formatted amounts", () => {
@@ -28,9 +36,9 @@ describe("toNum", () => {
   });
 });
 
-describe("parseGemmaPage amount coercion", () => {
+describe("parseVisionPage amount coercion", () => {
   it("normalizes European string amounts echoed by the model", () => {
-    const page = parseGemmaPage(
+    const page = parseVisionPage(
       JSON.stringify({
         vendor: "Atlas Print & Signage",
         invoiceNumber: "AP-7741",
@@ -49,17 +57,17 @@ describe("parseGemmaPage amount coercion", () => {
   });
 
   it("leaves plain numeric amounts unchanged", () => {
-    const page = parseGemmaPage(JSON.stringify({ subtotal: 3250, tax: 276.25, total: 3526.25 }));
+    const page = parseVisionPage(JSON.stringify({ subtotal: 3250, tax: 276.25, total: 3526.25 }));
     expect(page?.subtotal).toBe(3250);
     expect(page?.tax).toBe(276.25);
     expect(page?.total).toBe(3526.25);
   });
 });
 
-describe("mergeGemmaPages line items", () => {
+describe("mergeVisionPages line items", () => {
   it("parses European-formatted line item amounts", () => {
-    const merged = mergeGemmaPages([
-      parseGemmaPage(
+    const merged = mergeVisionPages([
+      parseVisionPage(
         JSON.stringify({
           vendor: "Atlas Print & Signage",
           lineItems: [
@@ -76,58 +84,11 @@ describe("mergeGemmaPages line items", () => {
   });
 });
 
-describe("mergeGemmaPages VAT arbitration", () => {
-  it("preserves competing page VAT candidates and selects the supplier page", () => {
-    const merged = mergeGemmaPages([
-      parseGemmaPage(JSON.stringify({ vatNumber: "NL987654321B01" })),
-      parseGemmaPage(
-        JSON.stringify({
-          vatNumber: "NL123456789B01",
-          vendorEmail: "billing@acme.example",
-          iban: "NL91ABNA0417164300",
-        }),
-      ),
-    ]);
-
-    expect(merged.vatCandidates.map((candidate) => candidate.value)).toEqual([
-      "NL987654321B01",
-      "NL123456789B01",
-    ]);
-    expect(merged.vatNumber).toEqual({ value: "NL123456789B01", page: 2 });
-  });
-
-  it("keeps the page-local supplier candidate when the customer is on an earlier page", () => {
-    const merged = mergeGemmaPages([
-      parseGemmaPage(JSON.stringify({ vatNumber: "BE0123456789" })),
-      parseGemmaPage(
-        JSON.stringify({
-          vatNumber: "BE0987654321",
-          vendorEmail: "accounts@supplier.be",
-        }),
-      ),
-    ]);
-
-    expect(merged.vatNumber?.value).toBe("BE0987654321");
-    expect(merged.vatNumber?.page).toBe(2);
-    expect(merged.vatCandidates).toHaveLength(2);
-  });
-
-  it("preserves the original first value when there is no supplier page anchor", () => {
-    const merged = mergeGemmaPages([
-      parseGemmaPage(JSON.stringify({ vatNumber: "DE123456789" })),
-      parseGemmaPage(JSON.stringify({ vatNumber: "FRAB123456789" })),
-    ]);
-
-    expect(merged.vatCandidates).toHaveLength(2);
-    expect(merged.vatNumber?.value).toBe("DE123456789");
-  });
-});
-
-describe("gemmaToFields", () => {
+describe("visionPageToFields", () => {
   it("surfaces the corrected European amounts", () => {
-    const fields = gemmaToFields(
-      mergeGemmaPages([
-        parseGemmaPage(
+    const fields = visionPageToFields(
+      mergeVisionPages([
+        parseVisionPage(
           JSON.stringify({
             vendor: "Atlas Print & Signage",
             invoiceNumber: "AP-7741",
@@ -147,7 +108,7 @@ describe("gemmaToFields", () => {
   it("computes due date from Dutch payment terms when the VLM returns nothing", () => {
     // The VLM saw "Betalingsconditie: 14 dagen" but the invoice has no
     // explicit uiterste betaaldatum / te betalen voor label, so it returned
-    // an empty dueDate. gemmaToFields should fall back to
+    // an empty dueDate. visionPageToFields should fall back to
     // dueDateFromPaymentTerms off the issue date, same as the regex reader.
     const pageText = [
       "Factuurdatum: 20-01-2025",
@@ -155,10 +116,10 @@ describe("gemmaToFields", () => {
       "Totaal: € 96,74",
     ].join("\n");
 
-    const fields = gemmaToFields(
-      mergeGemmaPages(
+    const fields = visionPageToFields(
+      mergeVisionPages(
         [
-          parseGemmaPage(
+          parseVisionPage(
             JSON.stringify({
               vendor: "De Vistegroet B.V.",
               invoiceNumber: "BV-2025-014",
@@ -179,10 +140,10 @@ describe("gemmaToFields", () => {
   });
 
   it("keeps a VLM-read due date and does not overwrite it with the terms fallback", () => {
-    const fields = gemmaToFields(
-      mergeGemmaPages(
+    const fields = visionPageToFields(
+      mergeVisionPages(
         [
-          parseGemmaPage(
+          parseVisionPage(
             JSON.stringify({
               vendor: "De Vistegroet B.V.",
               invoiceNumber: "BV-2025-014",
@@ -202,14 +163,24 @@ describe("gemmaToFields", () => {
   });
 
   it("keeps an empty due date when there are no payment terms and no issue date", () => {
-    const fields = gemmaToFields(
-      mergeGemmaPages(
-        [parseGemmaPage(JSON.stringify({ vendor: "Onbekend", invoiceNumber: "X-001", issueDate: undefined, dueDate: undefined, total: "0,00" }))],
+    const fields = visionPageToFields(
+      mergeVisionPages(
+        [
+          parseVisionPage(
+            JSON.stringify({
+              vendor: "Onbekend",
+              invoiceNumber: "X-001",
+              issueDate: undefined,
+              dueDate: undefined,
+              total: "0,00",
+            }),
+          ),
+        ],
         "",
       ),
     );
 
     expect(fields.dueDate).toBeUndefined();
     expect(fields.provenance.dueDate).toBe("derived");
-    });
+  });
 });

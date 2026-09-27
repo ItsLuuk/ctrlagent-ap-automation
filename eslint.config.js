@@ -6,27 +6,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  {
-    ignores: [
-      "dist",
-      "dist-tauri",
-      "build",
-      ".output",
-      ".vinxi",
-      ".worktrees",
-      ".superpowers",
-      ".tanstack",
-      ".lovable",
-      ".tmp",
-      "corpus",
-      "Dataset",
-      "test-results",
-      "node_modules",
-      "**/node_modules",
-      "**/venv",
-      "**/target",
-    ],
-  },
+  { ignores: ["dist", ".output", ".vinxi"] },
   {
     extends: [js.configs.recommended, ...tseslint.configs.recommended],
     files: ["**/*.{ts,tsx}"],
@@ -40,6 +20,18 @@ export default tseslint.config(
     },
     rules: {
       ...reactHooks.configs.recommended.rules,
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "server-only",
+              message:
+                "TanStack Start does not use the Next.js `server-only` package. Rename the module to `*.server.ts` or mark it with `@tanstack/react-start/server-only`.",
+            },
+          ],
+        },
+      ],
       "react-refresh/only-export-components": ["warn", { allowConstantExport: true }],
       "@typescript-eslint/no-unused-vars": "off",
       // Two agents editing one file can both add the same import; make that a

@@ -12,7 +12,6 @@ import {
   Cpu,
   FileText,
   Layers,
-  type Icon,
   Loader2,
   ScanLine,
   Stamp,
@@ -20,24 +19,11 @@ import {
 } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { STATUS_LABEL, STATUS_ORDER, type InvoiceStatus } from "@/lib/ap/types";
+import { LOW_CONFIDENCE } from "@/lib/ap/mapping";
 import { STATUS_TONES, colorClasses } from "@/lib/colors";
-
-/** Match the phase marks used by the invoice widget. */
-const STATUS_ICONS: Record<InvoiceStatus, Icon> = {
-  vendor_profile: Building2,
-  draft: FileText,
-  review: Stamp,
-  scheduled: Stamp,
-  rejected: X,
-  paid: Check,
-  archived: FileText,
-  processing: Loader2,
-  failed: X,
-};
 
 export function StatusBadge({ status, className }: { status: InvoiceStatus; className?: string }) {
   const tone = STATUS_TONES[status];
-  const Icon = STATUS_ICONS[status];
   return (
     <span
       className={cn(
@@ -47,8 +33,60 @@ export function StatusBadge({ status, className }: { status: InvoiceStatus; clas
         className,
       )}
     >
-      <Icon className="size-3" />
       {STATUS_LABEL[status]}
+    </span>
+  );
+}
+
+export function ConfidenceChip({
+  value,
+  label,
+  title,
+  tone = "pill",
+}: {
+  value?: number | undefined;
+  /** What the percentage is about, when a screen shows two kinds. */
+  label?: string | undefined;
+  title?: string | undefined;
+  /**
+   * "quiet" is a dot and a number in muted text, for a row that already has
+   * content in it. A filled pill per row turns supporting metadata into the
+   * loudest thing on the screen, and a screen where everything is loud has no
+   * reading order at all.
+   */
+  tone?: "pill" | "quiet";
+}) {
+  if (value === undefined) return null;
+  const pct = Math.round(value * 100);
+  const low = value < LOW_CONFIDENCE;
+  const description =
+    title ?? (low ? "Low confidence — check against the document" : "High confidence");
+  if (tone === "quiet") {
+    return (
+      <span
+        className="inline-flex items-center gap-1 text-[11px] tabular-nums text-muted-foreground"
+        title={description}
+      >
+        <span
+          aria-hidden
+          className={cn(
+            "size-1.5 rounded-full",
+            low ? colorClasses.warning.bg : colorClasses.success.bg,
+          )}
+        />
+        {label ? `${label} ${pct}%` : `${pct}%`}
+      </span>
+    );
+  }
+  return (
+    <span
+      className={cn(
+        "rounded-sm px-1.5 py-0.5 font-mono text-xs font-medium",
+        low ? `${colorClasses.warning.bg} text-white` : `${colorClasses.success.bg} text-white`,
+      )}
+      title={description}
+    >
+      {label ? `${label} ${pct}%` : `${pct}%`}
     </span>
   );
 }
@@ -62,7 +100,7 @@ export function EngineBadge({
   model,
   className,
 }: {
-  engine: "template" | "gemma" | "ocr" | undefined;
+  engine: "template" | "gemma" | "text" | undefined;
   templateFingerprint?: string | undefined;
   model?: string | undefined;
   className?: string | undefined;
@@ -112,7 +150,7 @@ export function FieldPathChip({
   path,
   className,
 }: {
-  path: "template" | "vlm" | "ocr" | undefined;
+  path: "template" | "vlm" | "text" | undefined;
   className?: string | undefined;
 }) {
   if (!path) return null;
@@ -234,12 +272,7 @@ export function Pipeline({
   const effectiveStep = isTerminal ? STATUS_ORDER.length - 1 : currentStep;
 
   return (
-    <div
-      className={cn(
-        variant === "card" &&
-          "rounded-lg border border-border bg-card p-4 shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]",
-      )}
-    >
+    <div className={cn(variant === "card" && "rounded-lg bg-card p-4 shadow-whisper")}>
       <div>
         <p className="text-sm font-semibold tracking-tight">{currentPhaseLabel(status)}</p>
       </div>

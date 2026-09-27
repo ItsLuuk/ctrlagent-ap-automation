@@ -20,10 +20,20 @@ import {
   type InvoiceValidationIssue,
 } from "./mapping";
 import { matchSummary, type MatchResult } from "./matching";
+import type { FlexMatchResult } from "./flex-matching";
 import { ibanChecksumValid, normalizeIban } from "./iban";
-import { money, ZONE_LABEL, type Invoice, type ZoneCheckResult, type ZoneField } from "./types";
+import {
+  money,
+  ZONE_LABEL,
+  type BusinessProfile,
+  type Invoice,
+  type ZoneCheckResult,
+  type ZoneField,
+} from "./types";
 import { countOf, term } from "./vocabulary";
-import type { PurchaseOrder } from "./po-store";
+import type { PurchaseOrder } from "./purchase-order";
+import type { BusinessEntity } from "./entities";
+import { taxFindings } from "./tax";
 import type { VendorMaster } from "./vendor-master";
 
 /** Sections of the compare list, in the order they read. */
@@ -33,7 +43,7 @@ export const GROUP_LABEL: Record<CheckGroup, string> = {
   vendor: "Vendor identity",
   header: "Invoice header",
   amounts: "Amounts",
-  lines: "Purchase order lines",
+  lines: "Line matching",
   commitments: "Commitments & flags",
   coding: "Coding",
 };
@@ -71,6 +81,7 @@ export type ApprovalCheck = {
   detail?: string | undefined;
   /** 1-based page the document value was read from, when known. */
   sourcePage?: number | undefined;
+  confidence?: number | undefined;
   zoneCheck?: ZoneCheckResult | undefined;
   /** Field whose value region the row can highlight in the document. */
   field?: ZoneField | undefined;
@@ -190,8 +201,9 @@ function identityChecks(invoice: Invoice, record: VendorMaster | undefined): App
   // it up — the amount and header rows, not just the identity ones.
   const base = (
     field: ZoneField,
-  ): Pick<ApprovalCheck, "sourcePage" | "zoneCheck"> => ({
+  ): Pick<ApprovalCheck, "sourcePage" | "confidence" | "zoneCheck"> => ({
     sourcePage: invoice.fieldSources?.[field],
+    confidence: invoice.confidence?.[field],
     zoneCheck: invoice.zoneCheck?.find((z) => z.field === field),
   });
 
@@ -339,6 +351,7 @@ function blockingRow(invoice: Invoice, issue: InvoiceValidationIssue): ApprovalC
         heldValue: `Invoice total ${money(invoice.total, currency)}`,
         field: "total",
         sourcePage: invoice.fieldSources?.total,
+        confidence: invoice.confidence?.total,
         zoneCheck: invoice.zoneCheck?.find((z) => z.field === "total"),
       };
     case "missing_coding":
@@ -425,6 +438,7 @@ function headerChecks(
       ...(issue ? { detail: ISSUE_FACT[issue.code] } : {}),
       field,
       sourcePage: invoice.fieldSources?.[field],
+      confidence: invoice.confidence?.[field],
       zoneCheck: invoice.zoneCheck?.find((z) => z.field === field),
     };
   });
@@ -476,7 +490,25 @@ function amountCheck(invoice: Invoice, issue: InvoiceValidationIssue | undefined
     detail: issue ? totals.fact : totals.detail || undefined,
     field: "total",
     sourcePage: invoice.fieldSources?.total,
+    confidence: invoice.confidence?.total,
     zoneCheck: invoice.zoneCheck?.find((z) => z.field === "total"),
+  };
+}
+
+function flexLineCheck(invoice: Invoice, flexMatch: FlexMatchResult): ApprovalCheck {
+  const severity = flexMatch.blocksApproval
+    ? ("blocking" as const)
+    : flexMatch.status === "matched" && flexMatch.canAutoApprove
+      ? ("ok" as const)
+      : ("attention" as const);
+  return {
+    id: "lines:no-po",
+    group: "lines",
+    label: "Approval evidence",
+    severity,
+    documentValue: countOf(invoice.lineItems.length, "line"),
+    heldValue: flexMatch.evidenceLabel ?? "No matching evidence",
+    detail: flexMatch.explanation,
   };
 }
 
@@ -484,10 +516,12 @@ function lineChecks(
   invoice: Invoice,
   po: PurchaseOrder | undefined,
   match: MatchResult | null | undefined,
+  flexMatch?: FlexMatchResult | undefined,
 ): ApprovalCheck[] {
   const currency = invoice.currency || "EUR";
-  if (!match) return [];
+  if (!match) return flexMatch ? [flexLineCheck(invoice, flexMatch)] : [];
   if (match.mode === "no_po") {
+    if (flexMatch) return [flexLineCheck(invoice, flexMatch)];
     return [
       {
         id: "lines:no-po",
@@ -518,7 +552,12 @@ function lineChecks(
       id: `lines:${line.invoiceLineId}`,
       group: "lines" as const,
       label: item?.description?.trim() || `${term("line", index + 1)} ${index + 1}`,
-      severity: line.status === "matched" ? ("ok" as const) : ("attention" as const),
+      severity:
+        line.status === "matched"
+          ? ("ok" as const)
+          : match.mode === "three_way"
+            ? ("blocking" as const)
+            : ("attention" as const),
       documentValue: `${qty} × ${money(unitPrice, currency)} = ${money(item?.amount ?? qty * unitPrice, currency)}`,
       heldValue: poLine
         ? `${poLine.quantity} × ${money(poLine.unitPrice, currency)} = ${money(poLine.amount, currency)}`
@@ -532,9 +571,13 @@ function commitmentChecks(
   invoice: Invoice,
   po: PurchaseOrder | undefined,
   match: MatchResult | null | undefined,
+  flexMatch?: FlexMatchResult | undefined,
 ): ApprovalCheck[] {
   const checks: ApprovalCheck[] = [];
   const exceptions = match?.exceptions.length ?? 0;
+  // A no-PO flex result already has one concise line in the matching group.
+  // Repeating it under commitments makes the reviewer read the same evidence twice.
+  if (!po && flexMatch) return checks;
   checks.push({
     id: "commitments:po",
     group: "commitments",
@@ -605,7 +648,16 @@ const TAG_EVIDENCE: Record<string, { severity: CheckSeverity; held: string; deta
 
 function codingChecks(invoice: Invoice, blocked: boolean): ApprovalCheck[] {
   if (blocked) return [];
-  const held = [invoice.department, invoice.glAccount].filter((v) => v && v.trim()).join(" · ");
+  const held = [
+    invoice.department,
+    invoice.glAccount,
+    invoice.category,
+    invoice.costCenter,
+    invoice.project,
+    invoice.location,
+  ]
+    .filter((v) => v && v.trim())
+    .join(" · ");
   return [
     {
       id: "coding:chosen",
@@ -688,6 +740,12 @@ export type ApprovalVerdictInput = {
   po?: PurchaseOrder | undefined;
   /** PO match result; null/undefined when there are no lines to match. */
   match?: MatchResult | null | undefined;
+  /** Contract, receipt, or rule evidence for an invoice without a PO. */
+  flexMatch?: FlexMatchResult | undefined;
+  /** The operator's own business profile — the buyer's side of every cross-border tax test. */
+  profile?: BusinessProfile | undefined;
+  /** The buying entity: its jurisdiction judges the tax rate against its own rules. */
+  entity?: BusinessEntity | undefined;
 };
 
 export function buildApprovalVerdict({
@@ -695,6 +753,9 @@ export function buildApprovalVerdict({
   vendorRecord,
   po,
   match,
+  flexMatch,
+  profile,
+  entity,
 }: ApprovalVerdictInput): ApprovalVerdict {
   const issues = validateInvoiceForConfirmation(invoice, "approve").filter(
     (issue) => issue.severity === "error",
@@ -727,8 +788,11 @@ export function buildApprovalVerdict({
     ...headerChecks(invoice, issueByCode),
     ...blocking,
     amountCheck(invoice, issueByCode.get("line_total_mismatch")),
-    ...lineChecks(invoice, po, match),
-    ...commitmentChecks(invoice, po, match),
+    // VAT formats, tax arithmetic, and the cross-border reverse-charge picture
+    // — all `attention`, judged here rather than gated (see tax.ts).
+    ...taxFindings(invoice, profile, entity?.jurisdiction),
+    ...lineChecks(invoice, po, match, flexMatch),
+    ...commitmentChecks(invoice, po, match, flexMatch),
     ...codingChecks(invoice, issueByCode.has("missing_coding")),
   ].map(markCorrected);
 

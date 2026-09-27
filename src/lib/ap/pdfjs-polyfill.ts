@@ -1,7 +1,7 @@
 /**
  * Polyfills for the new typed-array binary helpers that pdfjs-dist v6 relies
  * on (`Uint8Array.prototype.toHex` etc., TC39 proposal adopted in the newest
- * WebView engines). Engines without them throw `n.toHex is not a function`
+ * browser engines). Engines without them throw `n.toHex is not a function`
  * during pdf.js document fingerprinting — which surfaced as a swallowed
  * "We couldn't read that file" toast on every PDF upload.
  *
@@ -101,7 +101,7 @@ function installPolyfills(): void {
   }
 }
 
-// Worker realms have no `window`; guard before installing the polyfills.
+// Worker realms have no `window`; guard so the module is SSR-safe too.
 if (typeof self !== "undefined" && typeof Uint8Array !== "undefined") {
   installPolyfills();
 }

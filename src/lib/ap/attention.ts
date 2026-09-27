@@ -1,4 +1,5 @@
 import type { SyncEvent } from "./erp-sync";
+import type { FlexMatchResult } from "./flex-matching";
 import type { Invoice } from "./types";
 
 /** A concrete reason an invoice needs the next person's attention. */
@@ -30,6 +31,7 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
 export function attentionForInvoice(
   invoice: Invoice,
   latestSyncEvent?: SyncEvent,
+  flexMatch?: FlexMatchResult | undefined,
 ): InvoiceAttention | undefined {
   if (latestSyncEvent?.status === "failed") {
     return {
@@ -50,11 +52,13 @@ export function attentionForInvoice(
     };
   }
 
-  if (invoice.status === "review" && !invoice.poId && invoice.lineItems.length > 0) {
+  const coveredWithoutPo = flexMatch?.status === "matched" && flexMatch.canAutoApprove;
+  if (invoice.status === "review" && !invoice.poId && !coveredWithoutPo) {
     return {
       kind: "no_po",
-      label: ATTENTION_LABEL.no_po,
-      detail: "Approved-for-review invoice has no linked purchase order.",
+      label: flexMatch ? "Approval evidence needed" : ATTENTION_LABEL.no_po,
+      detail:
+        flexMatch?.explanation ?? "Approved-for-review invoice has no linked purchase order.",
     };
   }
 

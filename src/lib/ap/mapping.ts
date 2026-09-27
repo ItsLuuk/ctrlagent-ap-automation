@@ -22,14 +22,18 @@ import {
   type LineItemsSpec,
   type LearnPayload,
   type OcrWord,
+  type ExtractedField,
+  type ZoneCheckResult,
   type Zone,
   type ZoneField,
   CURRENCY_OPTIONS,
+  MAPPING_FIELDS,
   money,
   ZONE_FIELDS,
   ZONE_LABEL,
 } from "./types";
 import { moneyToNumber, parseDateParts } from "./zones";
+import { normalizeIban } from "./iban";
 
 export { moneyToNumber, parseDateParts };
 
@@ -89,6 +93,48 @@ export function unionBox(words: OcrWord[], pad = 0): Zone {
   };
 }
 
+/** Edge or corner being dragged during a visual mapping review. */
+export type ResizeDirection = "n" | "s" | "e" | "w" | "ne" | "nw" | "se" | "sw";
+
+/** Keeps manually resized value regions useful while staying on the page. */
+export const MIN_RESIZED_ZONE_WIDTH = 0.006;
+export const MIN_RESIZED_ZONE_HEIGHT = 0.004;
+
+/** Moves the selected edge(s) by a normalized pointer delta and clamps to the page. */
+export function resizeZone(
+  zone: Zone,
+  direction: ResizeDirection,
+  deltaX: number,
+  deltaY: number,
+): Zone {
+  let left = zone.x;
+  let top = zone.y;
+  let right = zone.x + zone.w;
+  let bottom = zone.y + zone.h;
+  const clamp = (value: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, value));
+
+  if (direction.includes("w")) {
+    left = clamp(left + deltaX, 0, Math.max(0, right - MIN_RESIZED_ZONE_WIDTH));
+  }
+  if (direction.includes("e")) {
+    right = clamp(right + deltaX, Math.min(1, left + MIN_RESIZED_ZONE_WIDTH), 1);
+  }
+  if (direction.includes("n")) {
+    top = clamp(top + deltaY, 0, Math.max(0, bottom - MIN_RESIZED_ZONE_HEIGHT));
+  }
+  if (direction.includes("s")) {
+    bottom = clamp(bottom + deltaY, Math.min(1, top + MIN_RESIZED_ZONE_HEIGHT), 1);
+  }
+
+  return {
+    x: round4(left),
+    y: round4(top),
+    w: round4(right - left),
+    h: round4(bottom - top),
+  };
+}
+
 const centerOf = (zone: Zone) => ({
   cx: zone.x + zone.w / 2,
   cy: zone.y + zone.h / 2,
@@ -141,9 +187,17 @@ const isNumericWord = (text: string) => /^\d/.test(lettersAndDigits(text));
  * templates survive small layout drift — hence the "anchor: 'Total' ✓" chip.
  */
 export function proposeAnchor(words: OcrWord[], region: Zone): string | undefined {
+  return proposeAnchorWord(words, region)?.text;
+}
+
+function proposeAnchorWord(words: OcrWord[], region: Zone): OcrWord | undefined {
   const { cx, cy } = centerOf(region);
-  let best: { text: string; score: number } | undefined;
+  let best: { word: OcrWord; score: number } | undefined;
   for (const w of words) {
+    // Never a word from inside the region: a value anchored on its own text is
+    // only ever right once. Next invoice the same words are somewhere else, or
+    // gone, and the template would read whatever is nearest instead.
+    if (isInside(w, region)) continue;
     if (!isPlausibleAnchorCandidate(w, region, cx)) continue;
     const candidate = lettersAndDigits(w.text);
     if (candidate.length < MIN_ANCHOR_WORD_LENGTH) continue;
@@ -152,9 +206,15 @@ export function proposeAnchor(words: OcrWord[], region: Zone): string | undefine
     const { cx: wordCx, cy: wordCy } = centerOf(w);
     const distance = Math.hypot(cx - wordCx, cy - wordCy);
     const score = candidate.length - distance * ANCHOR_DISTANCE_PENALTY;
-    if (best === undefined || score > best.score) best = { text: w.text, score };
+    if (best === undefined || score > best.score) best = { word: w, score };
   }
-  return best?.text;
+  return best?.word;
+}
+
+/** True when the word's center falls inside the rectangle. */
+function isInside(word: OcrWord, rect: Zone): boolean {
+  const { cx, cy } = centerOf(word);
+  return cx >= rect.x && cx <= rect.x + rect.w && cy >= rect.y && cy <= rect.y + rect.h;
 }
 
 /** Left-and-overlapping, or directly above the region within a few line heights. */
@@ -321,16 +381,8 @@ export function suggestZone(invoice: Invoice, field: ZoneField): Zone | undefine
   return unionBox(matches, REGION_PAD);
 }
 
-function fieldValue(invoice: Invoice, field: ZoneField): string | number | undefined {
+export function fieldValue(invoice: Invoice, field: ZoneField): string | number | undefined {
   switch (field) {
-    case "vendor":
-      return invoice.vendor;
-    case "invoiceNumber":
-      return invoice.invoiceNumber;
-    case "issueDate":
-      return invoice.issueDate;
-    case "dueDate":
-      return invoice.dueDate;
     case "subtotal":
       return invoice.subtotal;
     case "tax":
@@ -338,44 +390,273 @@ function fieldValue(invoice: Invoice, field: ZoneField): string | number | undef
     case "total":
       return invoice.total;
     default:
-      return undefined;
+      // Every other mapped field is a plain string on the invoice, the vendor
+      // identity ones included — they are read here exactly as they are
+      // written, so mapping an IBAN and typing one take the same path.
+      return invoice[field];
   }
+}
+
+/* ─── Finding a typed value on the page ─────────────────────────────── */
+
+/**
+ * A place on the page where a value was found. This is what a person types
+ * their way to: the value is already right, and the only open question is
+ * where it lives.
+ */
+export type ValueLocation = {
+  zone: Zone;
+  /** The words the match is made of — the box is their union. */
+  words: OcrWord[];
+  /** The text as printed, for someone choosing between two candidates. */
+  text: string;
+  /** True when the window *is* the value, false when it merely contains it. */
+  exact: boolean;
+};
+
+/** How many words in a row one value may span ("Superdoos.nl B.V."). */
+const MAX_VALUE_WORDS = 6;
+/** Half a cent: closer than this and two amounts are the same amount. */
+const MONEY_EPSILON = 0.005;
+/** Longest printed form of a value we will consider a plausible match. */
+const MAX_VALUE_CHARS = 64;
+
+/** The comparison a field's value needs — the page never prints it verbatim. */
+type ValueKind = "money" | "date" | "iban" | "text";
+
+function valueKindFor(field: ZoneField): ValueKind {
+  if (field === "subtotal" || field === "tax" || field === "total") return "money";
+  if (field === "issueDate" || field === "dueDate") return "date";
+  if (field === "iban") return "iban";
+  return "text";
+}
+
+/** Lowercased, punctuation-split words — "Superdoos.nl B.V." → 3 tokens. */
+function textTokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length > 0);
+}
+
+/**
+ * Scores a printed fragment against the value: 1 when it *is* the value,
+ * 0.7 when it merely contains it, undefined when it is something else.
+ *
+ * Field-aware on purpose. "14-03-2026" and "2026-03-14" are the same day, and
+ * "1.234,56" and "1234.56" are the same amount — a plain text search finds
+ * neither, and a template learned from a failed search is a template that
+ * fails on every future invoice.
+ */
+function scoreValueFragment(
+  kind: ValueKind,
+  fragment: string,
+  value: string | number,
+): number | undefined {
+  if (kind === "money") {
+    const target = typeof value === "number" ? value : moneyToNumber(value);
+    const printed = moneyToNumber(fragment);
+    if (target === undefined || printed === undefined) return undefined;
+    return Math.abs(printed - target) < MONEY_EPSILON ? 1 : undefined;
+  }
+  if (kind === "date") {
+    const target = parseDateParts(String(value));
+    const printed = parseDateParts(fragment);
+    if (!target || !printed) return undefined;
+    const same =
+      target.day === printed.day && target.month === printed.month && target.year === printed.year;
+    return same ? 1 : undefined;
+  }
+  if (kind === "iban") {
+    const target = normalizeIban(String(value));
+    if (target.length < 5) return undefined;
+    return normalizeIban(fragment) === target ? 1 : undefined;
+  }
+  const target = textTokens(String(value));
+  const printed = textTokens(fragment);
+  if (target.length === 0 || printed.length === 0) return undefined;
+  if (target.length === printed.length && target.every((token, i) => token === printed[i])) {
+    return 1;
+  }
+  for (let start = 0; start + target.length <= printed.length; start += 1) {
+    const contains = target.every((token, offset) => {
+      const word = printed[start + offset]!;
+      if (word === token) return true;
+      // A word the OCR split or joined ("B.V" vs "bv") is still the same word.
+      return token.length > 3 && word.length > 3 && word.includes(token);
+    });
+    if (contains) return 0.7;
+  }
+  return undefined;
+}
+
+/** Groups words into the lines they are printed on, left to right. */
+function linesOf(words: OcrWord[]): OcrWord[][] {
+  const sorted = [...words].sort(
+    (first, second) => first.y + first.h / 2 - (second.y + second.h / 2) || first.x - second.x,
+  );
+  const lines: OcrWord[][] = [];
+  for (const word of sorted) {
+    const line = lines[lines.length - 1];
+    const last = line?.[line.length - 1];
+    const sameLine =
+      last !== undefined &&
+      Math.abs(word.y + word.h / 2 - (last.y + last.h / 2)) <= Math.max(word.h, last.h) * 0.6;
+    if (sameLine) line!.push(word);
+    else lines.push([word]);
+  }
+  return lines;
+}
+
+/**
+ * Every place on the page where this value is printed, best first.
+ *
+ * One match is an answer. Several is a question the person answers with one
+ * click, which is the whole point: the alternative is finding that box by
+ * hand, and the person is looking at the page anyway.
+ */
+export function locateValue(
+  words: OcrWord[],
+  field: ZoneField,
+  value: string | number,
+): ValueLocation[] {
+  const printed = String(value).trim();
+  if (printed === "" || printed.length > MAX_VALUE_CHARS) return [];
+  const kind = valueKindFor(field);
+  const found: ValueLocation[] = [];
+  for (const line of linesOf(words)) {
+    const onLine: ValueLocation[] = [];
+    for (let start = 0; start < line.length; start += 1) {
+      const maxLength = Math.min(MAX_VALUE_WORDS, line.length - start);
+      for (let length = 1; length <= maxLength; length += 1) {
+        const window = line.slice(start, start + length);
+        const text = window.map((word) => word.text).join(" ");
+        const score = scoreValueFragment(kind, text, printed);
+        if (score === undefined) continue;
+        onLine.push({ zone: unionBox(window, REGION_PAD), words: window, text, exact: score === 1 });
+      }
+    }
+    found.push(...collapseOverlaps(onLine));
+  }
+  return found.sort(
+    (first, second) =>
+      Number(second.exact) - Number(first.exact) ||
+      first.zone.y - second.zone.y ||
+      first.zone.x - second.zone.x,
+  );
+}
+
+/**
+ * One entry per place, not per window. "Factuurnummer 2024-001" and "2024-001"
+ * are the same occurrence read two ways.
+ *
+ * The tight reading wins: a window that *is* the value beats one that merely
+ * contains it, so the box lands on the value and not on the label beside it.
+ * Where both readings are equally good — "€ 1.234,56" either side of the
+ * symbol — the wider one wins, so nothing of the value is left out.
+ */
+function collapseOverlaps(candidates: ValueLocation[]): ValueLocation[] {
+  const byPreference = [...candidates].sort(
+    (first, second) =>
+      Number(second.exact) - Number(first.exact) || second.words.length - first.words.length,
+  );
+  const kept: ValueLocation[] = [];
+  for (const location of byPreference) {
+    const sharesAWord = kept.some((other) =>
+      other.words.some((word) => location.words.includes(word)),
+    );
+    if (!sharesAWord) kept.push(location);
+  }
+  return kept;
+}
+
+/**
+ * The template to remember for a value that was found: an anchor label and the
+ * value's place relative to it, which is exactly what `applyTemplateField`
+ * reads back on the next invoice.
+ *
+ * No label beside the value means no spec. A spec with a made-up anchor is
+ * worse than none — it would read some other number on every future invoice,
+ * confidently.
+ */
+export function specForLocation(
+  words: OcrWord[],
+  field: ZoneField,
+  location: ValueLocation,
+): AnchorSpec | undefined {
+  const anchor = proposeAnchor(words, location.zone);
+  if (!anchor) return undefined;
+  const spec = buildAnchorSpec(words, field, location.zone, anchor);
+  if (!spec.anchor) return undefined;
+  return { ...spec, learnedBy: "typed" };
 }
 
 export type FieldStatus = "amber" | "green";
 
 /**
+ * Below this, a reading is worth a person's eyes. One number for the whole app:
+ * the confidence chips, the worklist and the low-confidence notice must not
+ * disagree about what "unsure" means.
+ */
+export const LOW_CONFIDENCE = 0.75;
+
+/**
  * Triage per the design doc: greens need a glance, ambers are the work.
- * Derived values, failed sanity checks, and empty values need a person's look.
+ * Amber when provenance is derived or manual, the sanity check disagreed, or
+ * the value is empty.
  */
 export function fieldStatus(
   invoice: Invoice,
   field: ZoneField,
   opts?: { zoneCheckMatch?: boolean | undefined },
 ): FieldStatus {
-  // A human correction is the resolution of the original read. Keep the old
-  // zone-check result for audit/history, but do not keep the field amber after
-  // the reviewer has explicitly replaced it.
-  if (invoice.provenance?.[field] === "manual") return "green";
+  const provenance = invoice.provenance?.[field];
+  if (provenance === "derived" || provenance === "manual" || provenance === undefined) {
+    return "amber";
+  }
   if (opts?.zoneCheckMatch === false) return "amber";
   const value = fieldValue(invoice, field);
   if (value === "" || value === 0) return "amber";
-  if (invoice.provenance?.[field] === "derived") return "amber";
   return "green";
 }
 
-/** Fields the DraftMapper maps, in triage display order (ambers first). */
+/**
+ * The zone-check result recorded for one field, when the AI reader produced
+ * one. A pure query over the invoice, so triage can ask it without the UI (or a
+ * component) having to hand the answer in.
+ */
+export function resultFor(
+  results: ZoneCheckResult[] | undefined,
+  field: ZoneField,
+): ZoneCheckResult | undefined {
+  if (!results) return undefined;
+  return results.find((r) => r.field === field);
+}
+
+/**
+ * Fields the DraftMapper maps, in triage display order (ambers first).
+ *
+ * `fields` decides the membership: the invoice fields on their own, or the
+ * vendor identity fields after them when the caller is profiling a first-time
+ * vendor and the whole document is one worklist.
+ */
 export function orderedFields(
   invoice: Invoice,
   statuses: Record<ZoneField, FieldStatus>,
+  fields: readonly ZoneField[] = ZONE_FIELDS,
 ): ZoneField[] {
-  return [...ZONE_FIELDS].sort((a, b) => {
+  return [...fields].sort((a, b) => {
     const amberA = statuses[a] === "amber" ? 0 : 1;
     const amberB = statuses[b] === "amber" ? 0 : 1;
     if (amberA !== amberB) return amberA - amberB;
-    return ZONE_FIELDS.indexOf(a) - ZONE_FIELDS.indexOf(b);
+    return fields.indexOf(a) - fields.indexOf(b);
   });
 }
+
+/** The vendor identity values, which live on the invoice beside its own. */
+export const IDENTITY_FIELDS: ExtractedField[] = MAPPING_FIELDS.filter(
+  (field) => !ZONE_FIELDS.includes(field),
+);
 
 // ---------------------------------------------------------------------------
 // Cross-checks and human summaries
@@ -515,6 +796,7 @@ export type ValidationScope = "confirm" | "approve";
 export function validateInvoiceForConfirmation(
   invoice: Invoice,
   scope: ValidationScope = "confirm",
+  absent: readonly ZoneField[] = [],
 ): InvoiceValidationIssue[] {
   const issues: InvoiceValidationIssue[] = [];
   if (!invoice.vendor.trim()) {
@@ -589,8 +871,30 @@ export function validateInvoiceForConfirmation(
       message: crossCheck.detail,
     });
   }
-  return issues;
+  // A field this vendor never prints is not a mistake in the invoice, and
+  // asking for it on every invoice from them is the same mistake every time.
+  if (absent.length === 0) return issues;
+  return issues.filter((issue) => {
+    const field = ISSUE_FIELD[issue.code];
+    return field === undefined || !absent.includes(field);
+  });
 }
+
+/**
+ * Which field each validation issue is about. Issues with no field here
+ * (currency, coding, the line total) are about the invoice, not about a value
+ * that could be missing from the page.
+ */
+export const ISSUE_FIELD: Partial<Record<InvoiceValidationIssue["code"], ZoneField>> = {
+  missing_vendor: "vendor",
+  missing_invoice_number: "invoiceNumber",
+  missing_issue_date: "issueDate",
+  invalid_issue_date: "issueDate",
+  missing_due_date: "dueDate",
+  invalid_due_date: "dueDate",
+  missing_total: "total",
+  invalid_total: "total",
+};
 
 const horizontalQuadrant = (cx: number) =>
   cx < QUADRANT.left ? "left" : cx > QUADRANT.right ? "right" : "middle";

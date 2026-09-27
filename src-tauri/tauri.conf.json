@@ -6,7 +6,7 @@
   "build": {
     "frontendDist": "../dist-tauri",
     "devUrl": "http://127.0.0.1:5173/tauri.html",
-    "beforeDevCommand": "bun run dev:vite",
+    "beforeDevCommand": "bun run dev:tauri",
     "beforeBuildCommand": "bun run build:tauri"
   },
   "app": {
@@ -27,7 +27,8 @@
     "active": true,
     "targets": "all",
     "resources": {
-      "windows/payload-installer.ps1": "payload-installer.ps1"
+      "resources/runtime": "runtime",
+      "resources/models": "models"
     },
     "icon": [
       "icons/32x32.png",
@@ -36,11 +37,6 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "windows": {
-      "nsis": {
-        "installerHooks": "./windows/hooks.nsh"
-      }
-    },
     "android": {
       "debugApplicationIdSuffix": ".debug"
     }

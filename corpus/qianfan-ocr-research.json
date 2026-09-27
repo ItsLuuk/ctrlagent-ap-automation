@@ -1,0 +1,39 @@
+{
+  "runAt": "2026-09-25T08:28:44.310Z",
+  "model": "maternion/Qianfan-OCR:4b-q4_K_M",
+  "results": [
+    {
+      "file": "Superdoos.nl invoice-p1.png",
+      "elapsedMs": 113902,
+      "doneReason": "length",
+      "evalCount": 512,
+      "lineItems": [
+        {
+          "description": "Brievenbusdoosje A6 160x110x27mm Bruin",
+          "amount": 19.95,
+          "matched": false
+        },
+        {
+          "description": "Verzendkosten",
+          "amount": 60,
+          "matched": false
+        }
+      ],
+      "response": "## Orderbevestiging\n\n<table><tr><td colspan=\"2\">Orderbevestiging</td></tr><tr><td>Ordernummer:</td><td>Datum:</td><td>20-01-2025</td></tr><tr><td>Referentie:</td><td>Betalingsconditie:</td><td>14 dagen</td></tr><tr><td>Web-ordernummer:</td><td>Leveringswijze:</td><td>Franco huis</td></tr><tr><td>Klantnummer:</td><td>9199</td><td></td></tr><tr><td>Jouw contactpersoon:</td><td>Jaap van der Heijden</td><td></td></tr></table>\n\n## Super-Klant\n\n<table><tr><td>Orbi Earplugs</td><td>BTW nummer:</td><td>NL005169491B25</td></tr><tr><td>Luk Koppen</td><td>Kvk nummer:</td><td>95691537</td></tr><tr><td>Ravelijnstraat 40</td><td></td><td></td></tr><tr><td>4102 AM Culemborg</td><td></td><td></td></tr><tr><td>Nederland</td><td></td><td></td></tr></table>\n\n## Afleveradres\n\n<table><tr><td>Orbi Earplugs</td><td>Aflever opmerkingen:</td></tr><tr><td>Ravelijnstraat 40</td><td>Ma-Vr 08:00-12:00 u 12:00 - 17:00 u. - Geen hefttruck aanwezig</td></tr><tr><td>4102 AM Culemborg</td><td></td></tr><tr><td>Nederland</td><td></td></tr></table>\n\nBedankt voor je bestelling, hieronder zie je hoe wij de bestelling in behandeling hebben genomen. Controleer dit goed om er zeker van te zijn dat alle gegevens correct zijn verwerkt.\n\n<table><tr><td>Product:</"
+    },
+    {
+      "file": "Invoice-RAX3IIUH-0002-p1.png",
+      "elapsedMs": 85933,
+      "doneReason": "stop",
+      "evalCount": 386,
+      "lineItems": [
+        {
+          "description": "OpenCode Go",
+          "amount": 10,
+          "matched": true
+        }
+      ],
+      "response": "## Factuur\n\nFactuurnummer RAX3IIUH-0002\n\nUitgifterdatum 13 juli 2026\n\nVervaldatum 13 juli 2026\n\nAnomaly\n\n2443 Fillmore Street\n\n#380-6343\n\nSan Francisco, California 94115\n\nVerenigde Staten\n\n+1 415-712-4747\n\nhelp@anoma.ly\n\nFactuur aan\n\nLuuk Chris Koppen\n\nRavelijnstraat 40\n\n4102 AM Culemborg\n\nNederland\n\nLuuk.c.koppen@gmail.com\n\n## US$ 10,00 vervalt op 13 jul 2026\n\nOnline betalen\n\n<table><tr><td>Beschrijving</td><td>Aantal</td><td>Eenheidsprijs</td><td>Bedrag</td></tr><tr><td>OpenCode Go13 jul 2026-13 aug 2026</td><td>1</td><td>US$ 10,00</td><td>US$ 10,00</td></tr><tr><td>Subtotaal</td><td></td><td></td><td>US$ 10,00</td></tr><tr><td>Totaal</td><td></td><td></td><td>US$ 10,00</td></tr><tr><td>Te betalen bedrag</td><td></td><td></td><td>US$ 10,00</td></tr></table>\n\nPagina 1 van 1"
+    }
+  ]
+}

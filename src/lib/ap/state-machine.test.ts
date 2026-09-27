@@ -4,7 +4,6 @@ import {
   availableTransitions,
   describeTransitionError,
   isFrozen,
-  handoffMarkerInForce,
   lastDecision,
   patchRefusal,
   restoreRecord,
@@ -16,7 +15,6 @@ import {
   TRANSITION_LABEL,
   type Actor,
 } from "./state-machine";
-import { SOLE_USER } from "./operator";
 import type { Invoice } from "./types";
 
 const processor: Actor = { name: "Patty Processor", roles: ["processor"] };
@@ -29,7 +27,7 @@ const invoice = (status: Invoice["status"], audit: Invoice["audit"] = []): Invoi
     status,
     audit,
     lineItems: [],
-    provenance: {},
+    confidence: {},
   }) as unknown as Invoice;
 
 const auditEntry = (action: string, actor = "someone") => ({
@@ -126,77 +124,55 @@ describe("segregation of duties", () => {
     expect(s.released).toBeUndefined();
   });
 
-  it("lets a sole user with all roles confirm then approve the same invoice", () => {
+  it("blocks a single operator from confirming then approving when the rule is enabled", () => {
     const sole: Actor = {
       name: "Sole Finance",
       roles: ["processor", "approver", "treasury"],
     };
-    const confirmed = invoice("draft");
-    const r1 = transition(confirmed, { transition: "confirm", actor: sole, soleUser: true });
+    const r1 = transition(invoice("draft"), { transition: "confirm", actor: sole });
     expect(r1.ok).toBe(true);
     const review = invoice("review", [auditEntry(TRANSITION_LABEL.confirm, "Sole Finance")]);
-    const r2 = transition(review, {
-      transition: "approve",
-      actor: sole,
-      note: "ok",
-      soleUser: true,
-    });
-    expect(r2.ok).toBe(true);
+    const r2 = transition(review, { transition: "approve", actor: sole, note: "ok" });
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) {
+      expect(r2.error.kind).toBe("sod");
+      if (r2.error.kind === "sod") expect(r2.error.rule).toBe("extractor_ne_approver");
+    }
   });
 
-  it("still blocks SoD for the same dual-role actor when not sole user", () => {
-    const dual: Actor = { name: "Dana Dual", roles: ["processor", "approver"] };
-    const inv = invoice("review", [auditEntry(TRANSITION_LABEL.confirm, "Dana Dual")]);
-    const r = transition(inv, {
-      transition: "approve",
-      actor: dual,
-      note: "ok",
-      soleUser: false,
-    });
+  it("allows the configured rule to be disabled explicitly", () => {
+    const sole: Actor = { name: "Sole Finance", roles: ["processor", "approver", "treasury"] };
+    const inv = invoice("review", [auditEntry(TRANSITION_LABEL.confirm, "Sole Finance")]);
+    const policy = {
+      extractor_ne_approver: false,
+      approver_ne_releaser: true,
+      bank_change_dual_control: true,
+    };
+    expect(transition(inv, { transition: "approve", actor: sole, sodPolicy: policy }).ok).toBe(true);
+  });
+
+  it("blocks the approver from releasing the same invoice", () => {
+    const dual: Actor = { name: "Dana Dual", roles: ["approver", "treasury"] };
+    const inv = invoice("scheduled", [auditEntry(TRANSITION_LABEL.approve, "Dana Dual")]);
+    const r = transition(inv, { transition: "release", actor: dual });
     expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.kind).toBe("sod");
+    if (!r.ok && r.error.kind === "sod") expect(r.error.rule).toBe("approver_ne_releaser");
   });
 
   it("still enforces role gates for a sole user missing the role", () => {
     const soleProcessor: Actor = { name: "Only Proc", roles: ["processor"] };
     const inv = invoice("review", [auditEntry(TRANSITION_LABEL.confirm, "Someone Else")]);
-    const r = transition(inv, {
-      transition: "approve",
-      actor: soleProcessor,
-      note: "x",
-      soleUser: true,
-    });
+    const r = transition(inv, { transition: "approve", actor: soleProcessor, note: "x" });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.error.kind).toBe("role");
   });
 
-  // The install the app actually ships as. Foundry has no accounts, so the only
-  // processor is the person who saved the vendor profile — and when the exemption
-  // is missing the invoice can never leave Draft, because no other actor in the
-  // app may confirm it: the approver persona fails the role gate and the system
-  // actor is not offered by any screen.
-  it("lets the operator who saved the vendor profile confirm that invoice", () => {
-    const operator: Actor = { name: "Luuk Koppen", roles: ["processor"] };
-    const saved = invoice("draft", [
-      auditEntry(TRANSITION_LABEL["vendor-profile-confirmed"], operator.name),
-    ]);
-
-    // The duty split the exemption exists for: without it, this is the dead end.
-    expect(transition(saved, { transition: "confirm", actor: operator }).ok).toBe(false);
-    expect(
-      transition(saved, { transition: "confirm", actor: operator, soleUser: SOLE_USER }).ok,
-    ).toBe(true);
-    // The UI asks the same question through availableTransitions.
-    expect(availableTransitions(saved, operator, { soleUser: SOLE_USER })).toContain("confirm");
-  });
-
-  it("availableTransitions accepts soleUser option", () => {
-    const sole: Actor = {
-      name: "Sole Finance",
-      roles: ["processor", "approver", "treasury"],
-    };
+  it("availableTransitions accepts the configured policy", () => {
+    const sole: Actor = { name: "Sole Finance", roles: ["processor", "approver", "treasury"] };
     const inv = invoice("review", [auditEntry(TRANSITION_LABEL.confirm, "Sole Finance")]);
-    expect(availableTransitions(inv, sole, { soleUser: true })).toContain("approve");
+    expect(availableTransitions(inv, sole, {
+      sodPolicy: { extractor_ne_approver: false, approver_ne_releaser: true, bank_change_dual_control: true },
+    })).toContain("approve");
     expect(availableTransitions(inv, sole)).not.toContain("approve");
   });
 });
@@ -265,6 +241,7 @@ describe("describeTransitionError", () => {
       kind: "sod",
       responsibility: "confirmed",
       actor: "Luuk Koppen",
+      rule: "extractor_ne_approver",
     });
     expect(text).toContain("Luuk Koppen");
     expect(text).toContain("someone else");
@@ -296,28 +273,6 @@ describe("vendor profile registration phase", () => {
     if (!r.ok) expect(r.error.kind).toBe("role");
   });
 
-  // The capture-time routing decision has two outcomes, so it has two entry
-  // points. A single `register-profile` call for both dragged every known
-  // vendor's invoice back into registration while its audit note claimed the
-  // invoice had entered Draft.
-  it("route-known-vendor is a system-only entry point that lands in Draft", () => {
-    const r = transition(invoice("draft"), {
-      transition: "route-known-vendor",
-      actor: SYSTEM_ACTOR,
-    });
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.result.status).toBe("draft");
-  });
-
-  it("rejects route-known-vendor when not run by the system actor", () => {
-    const r = transition(invoice("draft"), {
-      transition: "route-known-vendor",
-      actor: processor,
-    });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.kind).toBe("role");
-  });
-
   it("vendor-profile-confirmed moves the invoice into Draft", () => {
     const r = transition(invoice("vendor_profile"), {
       transition: "vendor-profile-confirmed",
@@ -325,6 +280,41 @@ describe("vendor profile registration phase", () => {
     });
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.result.status).toBe("draft");
+  });
+
+  it("confirm-from-profiling takes a profiled vendor straight to approval", () => {
+    const r = transition(invoice("vendor_profile"), {
+      transition: "confirm-from-profiling",
+      actor: processor,
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.result.status).toBe("review");
+      expect(r.result.auditAction).toBe(TRANSITION_LABEL["confirm-from-profiling"]);
+    }
+  });
+
+  it("refuses confirm-from-profiling outside the profiling stage", () => {
+    const r = transition(invoice("draft"), {
+      transition: "confirm-from-profiling",
+      actor: processor,
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.kind).toBe("illegal");
+  });
+
+  it("counts a profiling confirm as the confirmation for segregation of duties", () => {
+    const dual: Actor = { name: "Dana Dual", roles: ["processor", "approver"] };
+    const profiled = invoice("review", [
+      auditEntry(TRANSITION_LABEL["confirm-from-profiling"], "Dana Dual"),
+    ]);
+    expect(sodState(profiled).confirmed).toBe("Dana Dual");
+
+    // The person who pinned the identity and mapped the fields may not also
+    // approve the payment of the same invoice.
+    const r = transition(profiled, { transition: "approve", actor: dual });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.kind).toBe("sod");
   });
 
   it("vendor-profile-rejected requires a reason", () => {
@@ -519,35 +509,5 @@ describe("the decision a record sits on", () => {
 
   it("is undefined on a record that was never decided", () => {
     expect(lastDecision(invoice("draft", [auditEntry(TRANSITION_LABEL.confirm)]))).toBeUndefined();
-  });
-});
-
-describe("handoffMarkerInForce", () => {
-  it("counts a marker written after the approval it belongs to", () => {
-    const inv = invoice("scheduled", [
-      auditEntry(TRANSITION_LABEL.confirm, "Patty Processor"),
-      auditEntry(TRANSITION_LABEL.approve, "Dana Whitfield"),
-      auditEntry(TRANSITION_LABEL.release, "Payments"),
-    ]);
-    expect(handoffMarkerInForce(inv)).toBe(true);
-  });
-
-  it("ignores a marker left over from before a re-open and a second approval", () => {
-    // The bug this pins: the old marker is still in the history, so a scan of
-    // the whole audit reports a handoff that the current decision never earned —
-    // and the screen then offers no way to mark the real one.
-    const inv = invoice("scheduled", [
-      auditEntry(TRANSITION_LABEL.approve, "Dana Whitfield"),
-      auditEntry(TRANSITION_LABEL.release, "Payments"),
-      auditEntry(TRANSITION_LABEL["re-open"], "Dana Whitfield"),
-      auditEntry(TRANSITION_LABEL.approve, "Sam de Vries"),
-    ]);
-    expect(lastDecision(inv)?.actor).toBe("Sam de Vries");
-    expect(handoffMarkerInForce(inv)).toBe(false);
-  });
-
-  it("is true on a record marked for handoff with no decision of its own", () => {
-    const inv = invoice("scheduled", [auditEntry(TRANSITION_LABEL.release, "Sam de Vries")]);
-    expect(handoffMarkerInForce(inv)).toBe(true);
   });
 });

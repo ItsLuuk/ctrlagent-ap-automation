@@ -34,6 +34,7 @@ export const TERMS = {
   queue: { one: "queue", many: "queues" },
   // Things copy counts, kept here so their plurals stay consistent too.
   field: { one: "field", many: "fields" },
+  sureField: { one: "sure field", many: "sure fields" },
   line: { one: "line", many: "lines" },
   row: { one: "row", many: "rows" },
   check: { one: "check", many: "checks" },

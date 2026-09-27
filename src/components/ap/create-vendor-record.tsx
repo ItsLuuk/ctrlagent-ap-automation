@@ -19,7 +19,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { VendorProfileCard } from "./vendor-profile-card";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import type { Invoice } from "@/lib/ap/types";
 import {
   REQUIRED_PROFILE_FIELDS,
@@ -86,6 +86,11 @@ export function CreateVendorRecordButton({ invoice }: { invoice: Invoice }) {
             <Button onClick={handleSave} disabled={gaps.length > 0}>
               <Save className="size-4" /> Create record
             </Button>
+            {gaps.length > 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Required fields are missing — the profile can't be created until every field the vendor master needs has a value.
+              </p>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

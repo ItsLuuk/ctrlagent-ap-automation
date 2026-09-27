@@ -7,7 +7,7 @@
  *   heuristic — page text (what a digital PDF or OCR produces) →
  *               `extractFieldsFromPages`
  *   vlm       — raw model JSON per page (captured from the local VLM) →
- *               `parseGemmaPage` → `mergeGemmaPages` → `gemmaToFields`
+ *               `parseVisionPage` → `mergeVisionPages` → `visionPageToFields`
  *   template  — page words + a learned `AnchorSpec` per field →
  *               `applyTemplateField`
  *
@@ -450,7 +450,7 @@ export const FIXTURES: Fixture[] = [
     },
   },
 
-  // ---- VLM path: raw model JSON → gemmaToFields --------------------------
+  // ---- VLM path: raw model JSON → visionPageToFields -----------------------
   {
     id: "vlm/clean",
     source: "vlm",

@@ -141,6 +141,81 @@ export function seedProfileFromInvoice(invoice: Invoice): VendorMaster {
   return record;
 }
 
+/* ─── What this invoice would change ─────────────────────────────── */
+
+export type IdentityChangeKind = "new" | "changed" | "unchanged" | "cleared";
+
+export type IdentityChange = {
+  field: ProfileField;
+  /** What vendor-master holds today; undefined when it holds nothing yet. */
+  onFile: string | undefined;
+  /** What this invoice would write, empty when the row was cleared. */
+  next: string;
+  kind: IdentityChangeKind;
+};
+
+/** IBANs arrive from the document spaced; they are stored and compared packed. */
+const comparable = (field: ProfileField, value: string): string =>
+  field === "iban" ? normalizeIban(value) : value.trim();
+
+/**
+ * Identity values, one line each: what the vendor record holds now against what
+ * this invoice would write.
+ *
+ * The mapping screen shows this so a change to the record is visible while the
+ * operator is still looking at the document, not after a save that a second
+ * person then has to sign off. Department is left out — it is a choice, not
+ * something read off the document.
+ */
+export function identityChanges(
+  current: VendorMaster | undefined,
+  next: VendorMaster,
+): IdentityChange[] {
+  return PROFILE_FIELDS.filter((field) => field !== "department").map((field) => {
+    const onFileRaw = current?.[field]?.trim();
+    const onFile = onFileRaw ? onFileRaw : undefined;
+    const nextValue = next[field]?.trim() ?? "";
+    let kind: IdentityChangeKind;
+    if (!nextValue) kind = onFile ? "cleared" : "unchanged";
+    else if (!onFile) kind = "new";
+    else if (comparable(field, onFile) === comparable(field, nextValue)) kind = "unchanged";
+    else kind = "changed";
+    return { field, onFile, next: nextValue, kind };
+  });
+}
+
+/**
+ * The vendor record the mapped identity values imply, over whatever we already
+ * hold for this vendor.
+ *
+ * Profiling derives the profile from the invoice instead of a form: the values
+ * were read off the document by the same mapping that teaches the template, so
+ * there is one input and one place it lives. Values the mapping did not reach
+ * (a logo, a department) survive from the existing record, and IBAN/VAT are
+ * upper-cased here for the same reason the registration screen did it.
+ */
+export function vendorProfileFromMapping(
+  invoice: Invoice,
+  existing?: VendorMaster,
+  updatedAt?: string,
+): VendorMaster {
+  const record: VendorMaster = {
+    ...existing,
+    name: invoice.vendor ?? existing?.name ?? "",
+    email: invoice.vendorEmail ?? existing?.email ?? "",
+    address: invoice.address ?? existing?.address,
+    // OCR of an IBAN arrives spaced ("NL91 ABNA 0417 1643 00"), and a bank
+    // detail that is stored with the spaces in it is a bank detail that will
+    // not compare equal to the one printed on the next invoice.
+    iban: invoice.iban === undefined ? existing?.iban : normalizeIban(invoice.iban),
+    vatNumber: invoice.vatNumber?.toUpperCase() ?? existing?.vatNumber,
+    businessRegistrationNumber:
+      invoice.businessRegistrationNumber ?? existing?.businessRegistrationNumber,
+    updatedAt: updatedAt ?? new Date().toISOString(),
+  };
+  return record;
+}
+
 /* ─── Audit: identity corrections ───────────────────────────────── */
 
 const asText = (value: string | undefined): string =>
@@ -166,4 +241,16 @@ export function profileCorrections(
     const b = asText(saved[field]);
     return !sameValue(field, a, b);
   }).map((field) => ({ field, from: asText(seed[field]), to: asText(saved[field]) }));
+}
+
+/**
+ * The key one vendor's record is filed under, for an invoice that names them.
+ *
+ * UBL supplies exact identity (BT-1/BT-2); everything else is fuzzy, so the
+ * vendor name is the key. Every rule that groups invoices by vendor reads it
+ * from here, which is why it lives in the domain core rather than in the
+ * profile store: counting a vendor's track record must not require storage.
+ */
+export function resolveVendorKey(invoice: Invoice): string {
+  return invoice.vendor.toLowerCase().trim();
 }

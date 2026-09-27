@@ -6,18 +6,22 @@
  * actually stops the approval, a plain card otherwise, because "nothing blocks
  * approval" is not a warning and painting it amber put good news in the same
  * weight as a problem. The flagged rows live in the compare list below, each one
- * already carrying its own verdict, so the strip carries no counts and no
+ * already marked with its own confidence, so the strip carries no counts and no
  * second sentence restating them.
  */
 import { AlertTriangle, CheckCircle2, ListChecks } from "@/components/icons";
+import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { ApprovalVerdict } from "@/lib/ap/approval";
 
 export function ApprovalVerdictStrip({
   verdict,
+  onReviewNext,
   className,
 }: {
   verdict: ApprovalVerdict;
+  /** Offered when there are attention-only rows to work through. */
+  onReviewNext?: (() => void) | undefined;
   className?: string;
 }) {
   const blocked = verdict.blocking.length > 0;
@@ -27,8 +31,10 @@ export function ApprovalVerdictStrip({
   return (
     <section
       className={cn(
-        "mt-5 rounded-lg border p-4",
-        blocked ? "border-destructive/40 bg-destructive/5" : "border-border bg-card",
+        "mt-5 rounded-lg p-4",
+        blocked
+          ? "border border-destructive/40 bg-destructive/5"
+          : "bg-card shadow-whisper",
         className,
       )}
     >
@@ -43,12 +49,23 @@ export function ApprovalVerdictStrip({
                 : "text-success-foreground",
           )}
         />
-        <div>
+        <div className="min-w-0">
           <p
             className={cn("text-sm font-medium", blocked ? "text-destructive" : "text-foreground")}
           >
             {verdict.headline}
           </p>
+          {attention && onReviewNext ? (
+            <Button
+              size="sm"
+              variant="outline"
+              className="mt-2 gap-1.5 shrink-0"
+              onClick={onReviewNext}
+            >
+              <ListChecks className="size-3.5" />
+              Review {verdict.attention.length} {verdict.attention.length === 1 ? "row" : "rows"}
+            </Button>
+          ) : null}
         </div>
       </div>
     </section>

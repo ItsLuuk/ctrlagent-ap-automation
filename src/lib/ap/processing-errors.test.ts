@@ -7,7 +7,7 @@ import {
 
 describe("processing failure communication", () => {
   it("names the user-facing stage", () => {
-    expect(processingStageLabel("preprocessing")).toBe("Preparing the document");
+    expect(processingStageLabel("reading document")).toBe("Reading invoice fields");
     expect(processingStageLabel("AI reading document")).toBe("Reading invoice fields");
     expect(processingStageLabel("pdf worker startup")).toBe("Starting the PDF reader");
   });
@@ -41,8 +41,8 @@ describe("processing failure communication", () => {
   });
 
   it("does not expose a generic legacy failure message", () => {
-    const reason = processingFailureReason(new Error("unexpected runtime failure"), "layout ocr");
-    expect(reason).toContain("reading the page layout");
+    const reason = processingFailureReason(new Error("unexpected runtime failure"), "reading document");
+    expect(reason).toContain("reading invoice fields");
     expect(reason).toContain("unexpected runtime failure");
     expect(reason).not.toBe("We couldn’t read this document");
   });

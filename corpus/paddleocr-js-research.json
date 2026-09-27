@@ -1,0 +1,78 @@
+{
+  "done": "true",
+  "results": [
+    {
+      "file": "/.desktop-builds/research-pages/Invoice-RAX3IIUH-0002-p1.png",
+      "elapsedMs": 6838,
+      "metrics": {
+        "detMs": 2530.5999999940395,
+        "recMs": 4284.199999988079,
+        "totalMs": 6836.5,
+        "detectedBoxes": 38,
+        "recognizedCount": 38
+      },
+      "runtime": {
+        "requestedBackend": "wasm",
+        "detProvider": "wasm",
+        "recProvider": "wasm",
+        "webgpuAvailable": false
+      },
+      "text": "Factuur\n回\nFactuurnummer RAX3llUH-0002\nUitgiftedatum\n13 juli 2026\nVervaldatum\n13 juli 2026\nAnomaly\nFactuur aan\n2443 Fillmore Street\nLuuk Chris Koppen\n#380-6343\nRavelijnstraat 40\nSan Francisco, California 94115\n4102AM Culemborg\nVerenigde Staten\nNederland\n+1 415-712-4747\nLuuk.c.koppen@gmail.com\nhelp@anoma.ly\nUs$ 10,00 vervalt op 13 juli 2026\nOnline betalen\nBeschrijving\nAantal\nEenheidsprijs\nBedrag\nOpenCode Go\n1\nUS$ 10,00\nUS$ 10,00\n13 jul 2026-13 aug 2026\nSubtotaal\nUS$ 10,00\nTotaal\nUS$ 10,00\nTe betalen bedrag\nUS$ 10,00\nPagina 1 van 1"
+    },
+    {
+      "file": "/.desktop-builds/research-pages/factuur_2607551285-p1.png",
+      "elapsedMs": 10327,
+      "metrics": {
+        "detMs": 1894.5,
+        "recMs": 8421.40000000596,
+        "totalMs": 10326.899999976158,
+        "detectedBoxes": 51,
+        "recognizedCount": 51
+      },
+      "runtime": {
+        "requestedBackend": "wasm",
+        "detProvider": "wasm",
+        "recProvider": "wasm",
+        "webgpuAvailable": false
+      },
+      "text": "mobiel.nl\nFactuur\nFactuurdatum:\n27-06-2026\nDhr. L.C.K. Koppen\nFactuurnummer:\n2607551285\nRavelijnstraat 40\nOrderdatum:\n27-06-2026\n4102AM Culemborg\nOrdernummer:\n5068527\nAbonnement\nBekijk je contract voor alle specificaties van je abonnement\n50+ Mobiel 2 jaar sim only\nIngangsdatum:\n27-07-2026\nSimnummer:\n8931340000001691648\n06-nummer:\n0613949735\nTotaalbedrag:\n€2,50 p.m.\nomschrijving\nPrijs incl. btw\nTotaal\n€0,00\nDe eerste maand abonnementskosten betaal je, indien van toepassing, direct na het verwerken van je aanvraag aan 50+ Mobiel. Het bedrag\nzal door 50+ Mobiel worden geincasseerd. Zijn je abonnementskosten de eerste maanden gratis? Dan incasseert 50+ Mobiel ter verificatie\neen bedrag van € 0,01 van je rekening.\nOpmerking m.b.t. nummerbehoud:\nAls je nummerbehoud hebt aangevraagd, gaat je nieuwe abonnement in op de dag dat je oude abonnement uit de lucht gaat. Nadat je een\nnieuw 50+ Mobiel-abonnement hebt besteld op onze website wordt er een nummerbehoud verzoek ingediend bij de provider.\nBezoekadres\nPostadres\nNieuwstraat 22\nPostbus 155\n2266AD Leidschendam\n2260AD Leidschendam\nbtw-tarieven\nexcl. btw\nbtw incl. btw\nBedrijfsgegevens\nContact\nNL50 ABNA 0403 6121 01\nKVK 27 289 206\n:06 -24 96 66 02\nt.n.v. Websend BV\nBTW NL815982434B01\ne: info@mobiel.nl"
+    },
+    {
+      "file": "/.desktop-builds/research-pages/Superdoos.nl invoice-p1.png",
+      "elapsedMs": 8209,
+      "metrics": {
+        "detMs": 1162.9000000059605,
+        "recMs": 7039.5999999940395,
+        "totalMs": 8209.399999976158,
+        "detectedBoxes": 92,
+        "recognizedCount": 92
+      },
+      "runtime": {
+        "requestedBackend": "wasm",
+        "detProvider": "wasm",
+        "recProvider": "wasm",
+        "webgpuAvailable": false
+      },
+      "text": "superdoos.nl\njouw dozen op maat\nOrderbevestiging\nordernummer:\n54773\nDatum:\n20-01-2025\nReferentie:\nBetalingsconditie:\n14 dagen\nWeb-ordernummer:\n000003884\nLeveringswijze:\nFranco huis\nKlantnummer:\n91939\nJouw contactpersoon:\nJaap van der Heijden\nSuper-Klant\nOrbi Earplugs\nBTW nummer:\nNL005169491B25\nLuuk Koppen\nKvk nummer:\n95691537\nRavelijnstraat 40\n4102 AM Culemborg\nNederland\nAfleveradres\nOrbi Earplugs\nAflever opmerkingen:\nRavelijnstraat 40\nMa-Vr 08:00-12:00 u 12:00 - 17:00 u. - Geen heftruck aanwezig\n4102 AM Culemborg\nNederland\nBedankt voor je bestelling, hieronder zie je hoe wij de bestelling in behandeling hebben genomen. Controleer dit goed om er zeker van\nte zijn dat alle gegevens correct zijin verwerkt.\nProduct:\nA0302\nAfleverdatum:\nVolgt\nOmschrijving:\nBrievenbusdoosje A6 160x110x27mm - Bruin\nOpmerkingen:\nAantal\nPrijis\nEenheid\nTotaal\n500\n€ 0,120\nstuk\n€\n60,00\nProduct:\n998\nAfleverdatum:\nVolgt\nOmschrijving:\nVerzendkosten\nOpmerkingen:\nAantal\nPrijis\nEenheid\nTotaal\n1\n€ 19,950\nStuks\n€\n19,95\nSubtotaal\n€\n79,95\nBTW 21%\n€\n16,79\nTotaal\n€\n96,74\nHiervan is 96,74 euro reeds betaald op 20-01-2025 door middel\nvan Mollie (iDEAL).\nOpmerkingen\nPagina 1 van 2\nSuperdoos B.V.\nTel: +31(0)85 077 3684\nde Slof 10G\nE-mail: klantenservice@superdoos.nl\n5107 RJ Dongen\nIBAN: NL95 RABO 0336 3818 32\nNederland\nBIC: RABONL2U\nBTW nr: NL8595.20.572.B01\nKvk: 73408441"
+    },
+    {
+      "file": "/.desktop-builds/research-pages/Superdoos.nl invoice-p2.png",
+      "elapsedMs": 8867,
+      "metrics": {
+        "detMs": 1120.7999999821186,
+        "recMs": 7740.200000017881,
+        "totalMs": 8867,
+        "detectedBoxes": 29,
+        "recognizedCount": 29
+      },
+      "runtime": {
+        "requestedBackend": "wasm",
+        "detProvider": "wasm",
+        "recProvider": "wasm",
+        "webgpuAvailable": false
+      },
+      "text": "superdoos.nl\njouw dozen op maat\nOrderbevestiging\nLet op:\n1. Wij leveren van maandag t/m vrijdag tussen 8 en 17 uur. Graag ontvangen wij bericht mocht levering op bepaalde dagen of\ntijdstippen niet uitkomen. (tijdsleveringen en 2e levering kunnen extra kosten met zich mee brengen)\n2. Wij gaan er vanuit dat er op het leveradres een heftruck aanwezig is. Graag ontvangen wij bericht als er op het leveradres geen\nheftruck aanwezig is, dan komen we met een laadklep.\n3. Wij werken met een levertolerantie van 10% op de aantallen, we brengen de geleverde aantallen x prijs per stuk in rekening. Dit is\ngebruikelijk in de markt van maatwerk dozen. Hiermee kan meer of minder uitval tijdens productie worden opgevangen met behoud\nvan scherpe prijzen. Exacte aantallen gewenst? Neem dan contact op voor een prijs op maat.\n4. Alle maatvoeringen zijn binnenmaten (inwendige maten) de buitenmaat (uitwendige maat) van de doos is groter. De productie van\nkartonnen dozen op maat gaat samen met tolerantie in de maatvoering.\n5. Golfkarton is een natuurproduct dat batch per batch anders kan aanvoelen en anders kan reageren op machinale bewerkingen. Dit\nkan bijvoorbeeld effect hebben op de rillen. Gescheurde rillen aan de binnenzijde van de doos zijn in sommige situaties niet uit te\nsluiten.\nPrijzen 7 dagen geldig en zijn exclusief btw. Op al onze offertes, overeenkomsten en opdrachtbevestigingen zijn onze algemene\nvoorwaarden van toepassing. https://www.superdoos.nl/algemene-voorwaarden/\nPagina 2 van 2\nSuperdoos B.V.\nTel: +31(0)85 077 3684\nde Slof 10G\nE-mail: klantenservice@superdoos.nl\n5107 RJ Dongen\nIBAN: NL95 RABO 0336 3818 32\nNederland\nBIC: RABONL2U\nBTW nr: NL8595.20.572.B01\nKvk: 73408441"
+    }
+  ],
+  "text": "DONE\n[\n  {\n    \"file\": \"/.desktop-builds/research-pages/Invoice-RAX3IIUH-0002-p1.png\",\n    \"elapsedMs\": 6838,\n    \"metrics\": {\n      \"detMs\": 2530.5999999940395,\n      \"recMs\": 4284.199999988079,\n      \"totalMs\": 6836.5,\n      \"detectedBoxes\": 38,\n      \"recognizedCount\": 38\n    },\n    \"runtime\": {\n      \"requestedBackend\": \"wasm\",\n      \"detProvider\": \"wasm\",\n      \"recProvider\": \"wasm\",\n      \"webgpuAvailable\": false\n    },\n    \"text\": \"Factuur\\n回\\nFactuurnummer RAX3llUH-0002\\nUitgiftedatum\\n13 juli 2026\\nVervaldatum\\n13 juli 2026\\nAnomaly\\nFactuur aan\\n2443 Fillmore Street\\nLuuk Chris Koppen\\n#380-6343\\nRavelijnstraat 40\\nSan Francisco, California 94115\\n4102AM Culemborg\\nVerenigde Staten\\nNederland\\n+1 415-712-4747\\nLuuk.c.koppen@gmail.com\\nhelp@anoma.ly\\nUs$ 10,00 vervalt op 13 juli 2026\\nOnline betalen\\nBeschrijving\\nAantal\\nEenheidsprijs\\nBedrag\\nOpenCode Go\\n1\\nUS$ 10,00\\nUS$ 10,00\\n13 jul 2026-13 aug 2026\\nSubtotaal\\nUS$ 10,00\\nTotaal\\nUS$ 10,00\\nTe betalen bedrag\\nUS$ 10,00\\nPagina 1 van 1\"\n  },\n  {\n    \"file\": \"/.desktop-builds/research-pages/factuur_2607551285-p1.png\",\n    \"elapsedMs\": 10327,\n    \"metrics\": {\n      \"detMs\": 1894.5,\n      \"recMs\": 8421.40000000596,\n      \"totalMs\": 10326.899999976158,\n      \"detectedBoxes\": 51,\n      \"recognizedCount\": 51\n    },\n    \"runtime\": {\n      \"requestedBackend\": \"wasm\",\n      \"detProvider\": \"wasm\",\n      \"recProvider\": \"wasm\",\n      \"webgpuAvailable\": false\n    },\n    \"text\": \"mobiel.nl\\nFactuur\\nFactuurdatum:\\n27-06-2026\\nDhr. L.C.K. Koppen\\nFactuurnummer:\\n2607551285\\nRavelijnstraat 40\\nOrderdatum:\\n27-06-2026\\n4102AM Culemborg\\nOrdernummer:\\n5068527\\nAbonnement\\nBekijk je contract voor alle specificaties van je abonnement\\n50+ Mobiel 2 jaar sim only\\nIngangsdatum:\\n27-07-2026\\nSimnummer:\\n8931340000001691648\\n06-nummer:\\n0613949735\\nTotaalbedrag:\\n€2,50 p.m.\\nomschrijving\\nPrijs incl. btw\\nTotaal\\n€0,00\\nDe eerste maand abonnementskosten betaal je, indien van toepassing, direct na het verwerken van je aanvraag aan 50+ Mobiel. Het bedrag\\nzal door 50+ Mobiel worden geincasseerd. Zijn je abonnementskosten de eerste maanden gratis? Dan incasseert 50+ Mobiel ter verificatie\\neen bedrag van € 0,01 van je rekening.\\nOpmerking m.b.t. nummerbehoud:\\nAls je nummerbehoud hebt aangevraagd, gaat je nieuwe abonnement in op de dag dat je oude abonnement uit de lucht gaat. Nadat je een\\nnieuw 50+ Mobiel-abonnement hebt besteld op onze website wordt er een nummerbehoud verzoek ingediend bij de provider.\\nBezoekadres\\nPostadres\\nNieuwstraat 22\\nPostbus 155\\n2266AD Leidschendam\\n2260AD Leidschendam\\nbtw-tarieven\\nexcl. btw\\nbtw incl. btw\\nBedrijfsgegevens\\nContact\\nNL50 ABNA 0403 6121 01\\nKVK 27 289 206\\n:06 -24 96 66 02\\nt.n.v. Websend BV\\nBTW NL815982434B01\\ne: info@mobiel.nl\"\n  },\n  {\n    \"file\": \"/.desktop-builds/research-pages/Superdoos.nl invoice-p1.png\",\n    \"elapsedMs\": 8209,\n    \"metrics\": {\n      \"detMs\": 1162.9000000059605,\n      \"recMs\": 7039.5999999940395,\n      \"totalMs\": 8209.399999976158,\n      \"detectedBoxes\": 92,\n      \"recognizedCount\": 92\n    },\n    \"runtime\": {\n      \"requestedBackend\": \"wasm\",\n      \"detProvider\": \"wasm\",\n      \"recProvider\": \"wasm\",\n      \"webgpuAvailable\": false\n    },\n    \"text\": \"superdoos.nl\\njouw dozen op maat\\nOrderbevestiging\\nordernummer:\\n54773\\nDatum:\\n20-01-2025\\nReferentie:\\nBetalingsconditie:\\n14 dagen\\nWeb-ordernummer:\\n000003884\\nLeveringswijze:\\nFranco huis\\nKlantnummer:\\n91939\\nJouw contactpersoon:\\nJaap van der Heijden\\nSuper-Klant\\nOrbi Earplugs\\nBTW nummer:\\nNL005169491B25\\nLuuk Koppen\\nKvk nummer:\\n95691537\\nRavelijnstraat 40\\n4102 AM Culemborg\\nNederland\\nAfleveradres\\nOrbi Earplugs\\nAflever opmerkingen:\\nRavelijnstraat 40\\nMa-Vr 08:00-12:00 u 12:00 - 17:00 u. - Geen heftruck aanwezig\\n4102 AM Culemborg\\nNederland\\nBedankt voor je bestelling, hieronder zie je hoe wij de bestelling in behandeling hebben genomen. Controleer dit goed om er zeker van\\nte zijn dat alle gegevens correct zijin verwerkt.\\nProduct:\\nA0302\\nAfleverdatum:\\nVolgt\\nOmschrijving:\\nBrievenbusdoosje A6 160x110x27mm - Bruin\\nOpmerkingen:\\nAantal\\nPrijis\\nEenheid\\nTotaal\\n500\\n€ 0,120\\nstuk\\n€\\n60,00\\nProduct:\\n998\\nAfleverdatum:\\nVolgt\\nOmschrijving:\\nVerzendkosten\\nOpmerkingen:\\nAantal\\nPrijis\\nEenheid\\nTotaal\\n1\\n€ 19,950\\nStuks\\n€\\n19,95\\nSubtotaal\\n€\\n79,95\\nBTW 21%\\n€\\n16,79\\nTotaal\\n€\\n96,74\\nHiervan is 96,74 euro reeds betaald op 20-01-2025 door middel\\nvan Mollie (iDEAL).\\nOpmerkingen\\nPagina 1 van 2\\nSuperdoos B.V.\\nTel: +31(0)85 077 3684\\nde Slof 10G\\nE-mail: klantenservice@superdoos.nl\\n5107 RJ Dongen\\nIBAN: NL95 RABO 0336 3818 32\\nNederland\\nBIC: RABONL2U\\nBTW nr: NL8595.20.572.B01\\nKvk: 73408441\"\n  },\n  {\n    \"file\": \"/.desktop-builds/research-pages/Superdoos.nl invoice-p2.png\",\n    \"elapsedMs\": 8867,\n    \"metrics\": {\n      \"detMs\": 1120.7999999821186,\n      \"recMs\": 7740.200000017881,\n      \"totalMs\": 8867,\n      \"detectedBoxes\": 29,\n      \"recognizedCount\": 29\n    },\n    \"runtime\": {\n      \"requestedBackend\": \"wasm\",\n      \"detProvider\": \"wasm\",\n      \"recProvider\": \"wasm\",\n      \"webgpuAvailable\": false\n    },\n    \"text\": \"superdoos.nl\\njouw dozen op maat\\nOrderbevestiging\\nLet op:\\n1. Wij leveren van maandag t/m vrijdag tussen 8 en 17 uur. Graag ontvangen wij bericht mocht levering op bepaalde dagen of\\ntijdstippen niet uitkomen. (tijdsleveringen en 2e levering kunnen extra kosten met zich mee brengen)\\n2. Wij gaan er vanuit dat er op het leveradres een heftruck aanwezig is. Graag ontvangen wij bericht als er op het leveradres geen\\nheftruck aanwezig is, dan komen we met een laadklep.\\n3. Wij werken met een levertolerantie van 10% op de aantallen, we brengen de geleverde aantallen x prijs per stuk in rekening. Dit is\\ngebruikelijk in de markt van maatwerk dozen. Hiermee kan meer of minder uitval tijdens productie worden opgevangen met behoud\\nvan scherpe prijzen. Exacte aantallen gewenst? Neem dan contact op voor een prijs op maat.\\n4. Alle maatvoeringen zijn binnenmaten (inwendige maten) de buitenmaat (uitwendige maat) van de doos is groter. De productie van\\nkartonnen dozen op maat gaat samen met tolerantie in de maatvoering.\\n5. Golfkarton is een natuurproduct dat batch per batch anders kan aanvoelen en anders kan reageren op machinale bewerkingen. Dit\\nkan bijvoorbeeld effect hebben op de rillen. Gescheurde rillen aan de binnenzijde van de doos zijn in sommige situaties niet uit te\\nsluiten.\\nPrijzen 7 dagen geldig en zijn exclusief btw. Op al onze offertes, overeenkomsten en opdrachtbevestigingen zijn onze algemene\\nvoorwaarden van toepassing. https://www.superdoos.nl/algemene-voorwaarden/\\nPagina 2 van 2\\nSuperdoos B.V.\\nTel: +31(0)85 077 3684\\nde Slof 10G\\nE-mail: klantenservice@superdoos.nl\\n5107 RJ Dongen\\nIBAN: NL95 RABO 0336 3818 32\\nNederland\\nBIC: RABONL2U\\nBTW nr: NL8595.20.572.B01\\nKvk: 73408441\"\n  }\n]"
+}

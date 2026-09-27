@@ -1,9 +1,9 @@
 import { useMemo, useState } from "react";
-import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { toast } from "sonner";
 import {
+  AlertTriangle,
   ArrowUpRight,
-  Download,
   Inbox as InboxIcon,
   Loader2,
   Search,
@@ -13,34 +13,30 @@ import { PageHeader } from "@/components/ap/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Shell } from "@/components/ap/shell";
-import { InfoBanner, Pill, Section, Stat } from "@/components/ap/primitives";
+import { InfoBanner, Pill, Section } from "@/components/ap/primitives";
 import { StatusBadge } from "@/components/ap/status";
 import { TagBadge } from "@/components/ap/tag-badge";
 import { VendorLogo } from "@/components/ap/vendor-profile";
-import { useAp } from "@/lib/ap/store";
+import { useAp } from "@/lib/app/store";
 import {
-  AWAITING_PERSON,
-  BUCKET_BY_STATUS,
-  IN_FLIGHT,
-  LATER,
+  PHASE_BY_STATUS,
+  PHASE_LABEL,
+  PHASE_ORDER,
+  PHASE_STATUSES,
   money,
   shortDate,
-  type Bucket,
   type Invoice,
-  type InvoiceStatus,
+  type Phase,
 } from "@/lib/ap/types";
-import { TRANSITION_LABEL, type Actor } from "@/lib/ap/state-machine";
-import { moneyLine, totalsByCurrency } from "@/lib/ap/analytics";
-import { isLate } from "@/lib/ap/auto-tags";
-import {
-  approvedForHandoff,
-  bookkeepingCsv,
-  downloadCsv,
-  exportableForHandoff,
-  invoicesMissingPaymentRoute,
-} from "@/lib/ap/csv-export";
+import { TRANSITION_LABEL } from "@/lib/ap/state-machine";
+import { operatorActorWithRole } from "@/lib/ap/operator";
 import { countOf } from "@/lib/ap/vocabulary";
+import { attentionForInvoice } from "@/lib/ap/attention";
+import { standingFor } from "@/lib/ap/standing";
+import { matchNoPoInvoice } from "@/lib/ap/flex-matching";
+import { latestSyncByInvoice } from "@/lib/ap/erp-sync";
 import { UploadDialog } from "@/components/ap/upload-dialog";
+import { StandingSummary } from "@/components/ap/standing-summary";
 import { FirstRun } from "@/components/ap/first-run";
 
 export const Route = createFileRoute("/")({
@@ -63,11 +59,7 @@ export const Route = createFileRoute("/")({
   component: Inbox,
 });
 
-type Filter = Bucket | "history" | "removed";
-
-/** Money as one line per currency: the band never adds euros to dollars, and
- *  never labels a euro total with a dollar sign. */
-const sumOf = (invoices: Invoice[]) => moneyLine(totalsByCurrency(invoices));
+type Filter = Phase | "removed";
 
 /** When a record left the queue: the entry the removal itself wrote. */
 function removalEntry(invoice: Invoice) {
@@ -90,61 +82,80 @@ function removalLine(invoice: Invoice): string {
   return why ? `${why} · ${entry?.actor}` : `Removed by ${entry?.actor ?? "unknown"}`;
 }
 
-/** The name a tab shows. Buckets have fixed names; history/removed are their own lists. */
+/** The name a tab shows. Phases have fixed names; Removed is its own list. */
 function filterLabel(filter: Filter): string {
-  if (filter === "needsYou") return "Needs you";
-  if (filter === "inFlight") return "In flight";
-  if (filter === "later") return "Later";
-  if (filter === "history") return "History";
-  if (filter === "removed") return "Removed";
-  return filter;
+  return filter === "removed" ? "Removed" : PHASE_LABEL[filter];
 }
+
+/** The subtitle explains the queue's role, not the currently selected filter. */
+const WORK_QUEUE_DESCRIPTION = "Manage all your accounts payable here.";
 
 function Inbox() {
   const {
     invoices,
     history,
     removed,
-    purchaseOrders,
-    vendors,
-    operator,
     restoreInvoice,
     isFirstRun,
     hasSampleData,
     clearSampleData,
+    flexRules,
+    flexContracts,
+    flexReceipts,
+    businessProfile,
   } = useAp();
-  const [filter, setFilter] = useState<Filter>("needsYou");
+  const [filter, setFilter] = useState<Filter>("draft");
   const [query, setQuery] = useState("");
-  const navigate = useNavigate();
 
+  /**
+   * Every record lands in exactly one phase, so the tab counts always add up to
+   * the queue plus the completed list — nothing is counted twice, and nothing
+   * counted here is missing from the list it counts.
+   */
   const counts = useMemo(() => {
     const map = {
-      needsYou: 0,
-      inFlight: 0,
-      later: 0,
+      profiling: 0,
+      draft: 0,
+      approval: 0,
+      payment: 0,
       history: history.length,
       removed: removed.length,
     } as Record<Filter, number>;
-    for (const i of invoices) map[BUCKET_BY_STATUS[i.status]] += 1;
+    for (const i of invoices) map[PHASE_BY_STATUS[i.status]] += 1;
     return map;
   }, [invoices, history, removed]);
 
   /**
-   * The three buckets always render — they are the inbox's structure, not a
-   * population-dependent offer. History and Removed stay conditional: a tab
-   * that could only show an empty list is noise.
+   * The five phases always render — they are the inbox's structure, not a
+   * population-dependent offer. Profiling is first so a first-time vendor has
+   * an explicit place to land. Removed stays conditional: it is the way back
+   * from a removal, and a tab that could only show an empty list is noise.
    */
-  const filters = useMemo(() => {
-    const tabs: Filter[] = ["needsYou", "inFlight", "later"];
-    if (counts.history > 0) tabs.push("history");
-    if (counts.removed > 0) tabs.push("removed");
-    return tabs;
-  }, [counts]);
+  const filters = useMemo(() => [...PHASE_ORDER], []);
 
   /** The filter in view: a tab that loses its last row hands the view back to
    *  the first that still has one, so a stale selection can't show nothing. */
-  const active = filters.includes(filter) ? filter : (filters[0] ?? "needsYou");
+  const active = (filter !== "removed" && filters.includes(filter)
+    ? filter
+    : (filters[0] ?? "profiling")) as Filter;
 
+  const attentionByInvoice = useMemo(() => {
+    const syncMap = latestSyncByInvoice();
+    return new Map(
+      invoices.map((invoice) => [
+        invoice.id,
+        attentionForInvoice(
+          invoice,
+          syncMap[invoice.id],
+          matchNoPoInvoice(invoice, {
+            contracts: flexContracts,
+            receipts: flexReceipts,
+            rules: flexRules,
+          }),
+        ),
+      ]),
+    );
+  }, [invoices, flexContracts, flexReceipts, flexRules]);
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     const matchesQuery = (i: (typeof invoices)[number]) =>
@@ -152,119 +163,45 @@ function Inbox() {
       i.vendor.toLowerCase().includes(q) ||
       i.invoiceNumber.toLowerCase().includes(q) ||
       i.department.toLowerCase().includes(q);
-    if (active === "history") {
-      return history
-        .filter(matchesQuery)
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    }
-    if (active === "removed") {
-      return removed.filter(matchesQuery).sort((a, b) => removedAt(b) - removedAt(a));
-    }
-    // Needs you leads with the costliest wait (failed, then approval, then the
-    // two draft stages). In flight sorts newest first — the spinner rows are the
-    // youngest. Later ranks scheduled → rejected → paid → archived, then newest.
-    const needsYouOrder: Partial<Record<InvoiceStatus, number>> = {
-      failed: 0,
-      review: 1,
-      vendor_profile: 2,
-      draft: 3,
-    };
-    const laterOrder: Partial<Record<InvoiceStatus, number>> = {
-      scheduled: 0,
-      rejected: 1,
-      paid: 2,
-      archived: 3,
-    };
     const byRecency = (a: (typeof invoices)[number], b: (typeof invoices)[number]) =>
       new Date(b.issueDate || b.createdAt).getTime() -
       new Date(a.issueDate || a.createdAt).getTime();
 
-    const bucketRows = invoices.filter((i) => {
-      const bucket = BUCKET_BY_STATUS[i.status];
-      return (
-        (active === "needsYou" && bucket === "needsYou") ||
-        (active === "inFlight" && bucket === "inFlight") ||
-        (active === "later" && bucket === "later")
-      );
-    });
+    if (active === "removed") {
+      return removed.filter(matchesQuery).sort((a, b) => removedAt(b) - removedAt(a));
+    }
+    if (active === "history") {
+      // The completed list plus any settled record still in the queue: a paid or
+      // removed invoice must never end up on no tab at all.
+      return [...invoices.filter((i) => PHASE_BY_STATUS[i.status] === "history"), ...history]
+        .filter(matchesQuery)
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+    }
 
-    return bucketRows.filter(matchesQuery).sort((a, b) => {
-      if (active === "needsYou")
-        return (needsYouOrder[a.status] ?? 99) - (needsYouOrder[b.status] ?? 99);
-      if (active === "later") return (laterOrder[a.status] ?? 99) - (laterOrder[b.status] ?? 99);
-      return byRecency(a, b); // inFlight
+    const phaseRows = invoices.filter((i) => PHASE_BY_STATUS[i.status] === active);
+
+    return phaseRows.filter(matchesQuery).sort((a, b) => {
+      // The draft tab leads with the costliest wait (a broken read, then a
+      // draft, then a rejection to reopen) and trails with `processing`, which
+      // the machine still holds. Profiling is its own phase for first-time
+      // vendors. Approval and payment are read newest first.
+      if (active === "draft") {
+        const rank = PHASE_STATUSES.draft;
+        return rank.indexOf(a.status) - rank.indexOf(b.status) || byRecency(a, b);
+      }
+      return byRecency(a, b);
     });
   }, [invoices, history, removed, active, query]);
 
-  const totals = useMemo(
-    () => ({
-      open: invoices.filter((i) => i.status !== "rejected"),
-      // Of the money still on the table, what is already late — the one figure
-      // the band was missing. Same `isLate` the row tags wear, so the tile and
-      // the tag cannot disagree about what late means.
-      overdue: invoices.filter((i) => isLate(i)),
-      approved: invoices.filter((i) => i.status === "scheduled"),
-      completed: history,
-      // The manual gate, in full: every stage the machine cannot move itself.
-      needsYou: invoices.filter((i) => AWAITING_PERSON.includes(i.status)).length,
-      inFlight: invoices.filter((i) => IN_FLIGHT.includes(i.status)).length,
-      later: invoices.filter((i) => LATER.includes(i.status)).length,
-    }),
-    [invoices, history],
+  const standing = useMemo(
+    () => standingFor(invoices, attentionByInvoice),
+    [invoices, attentionByInvoice],
   );
-
-  /** Approved and captured — the set the handoff is measured by. */
-  const approved = useMemo(() => approvedForHandoff(invoices), [invoices]);
-  /** The same set, minus anything with no IBAN to pay: exactly the file's rows. */
-  const exportable = useMemo(() => exportableForHandoff(invoices, vendors), [invoices, vendors]);
-  /** Approved rows held back for want of a payment route. Never dropped quietly. */
-  const missingRoute = useMemo(
-    () => invoicesMissingPaymentRoute(invoices, vendors),
-    [invoices, vendors],
-  );
-
-  /** One file out, nothing sent: the handoff is the file itself. An approved
-   *  invoice with no IBAN on the document or the vendor profile stays out of it
-   *  — the toast names the vendor and opens the one field that fixes it, because
-   *  a row that quietly misses the file is an invoice nobody pays. */
-  const exportHandoff = () => {
-    if (approved.length === 0) return;
-    const blocked = missingRoute.map((invoice) => `${invoice.vendor} (${invoice.invoiceNumber})`);
-    const many = blocked.length !== 1;
-    const openVendors = { label: "Open vendors", onClick: () => navigate({ to: "/vendors" }) };
-    if (exportable.length === 0) {
-      toast.error(
-        `Nothing exported — ${countOf(blocked.length, "invoice")} ${many ? "have" : "has"} no payment route`,
-        {
-          description: `${blocked.join(", ")} — add the vendor's IBAN, then export again. No file was written; Foundry sent nothing.`,
-          action: openVendors,
-        },
-      );
-      return;
-    }
-    downloadCsv(
-      `foundry-approved-invoices-${new Date().toISOString().slice(0, 10)}.csv`,
-      bookkeepingCsv(invoices, purchaseOrders, vendors),
-    );
-    if (blocked.length > 0) {
-      toast.error(
-        `Exported ${countOf(exportable.length, "invoice")} — ${countOf(blocked.length, "invoice")} left out`,
-        {
-          description: `${blocked.join(", ")} ${many ? "have" : "has"} no IBAN on the invoice or the vendor profile, so ${many ? "they" : "it"} did not reach the file.`,
-          action: openVendors,
-        },
-      );
-      return;
-    }
-    toast.success(`Exported ${countOf(exportable.length, "invoice")} for handoff`, {
-      description: "A CSV for your bookkeeping import — Foundry sent nothing.",
-    });
-  };
 
   /** Puts a removed record back where it was — the same move the toast offers,
    *  so a removal can be walked back long after the toast has faded. */
   const restore = (id: string, vendor: string) => {
-    const result = restoreInvoice(id, operator);
+    const result = restoreInvoice(id, operatorActorWithRole("processor", businessProfile));
     if (!result.accepted) {
       toast.error(result.reason ?? "Couldn't put that record back.", {
         description: "Nothing changed — Removed still holds it.",
@@ -276,19 +213,7 @@ function Inbox() {
 
   return (
     <Shell>
-      <PageHeader
-        icon={InboxIcon}
-        title="Invoice inbox"
-        actions={
-          // On the first run the empty state owns the one action there is;
-          // two upload buttons on one screen is one too many.
-          isFirstRun ? null : (
-            <div className="hidden md:block">
-              <UploadDialog />
-            </div>
-          )
-        }
-      />
+      <PageHeader icon={InboxIcon} title="Invoice inbox" />
 
       {isFirstRun ? (
         <div className="mt-6">
@@ -309,116 +234,60 @@ function Inbox() {
             </InfoBanner>
           )}
 
-          <div
-            className={`mt-6 grid grid-cols-2 gap-3 sm:gap-4 ${
-              totals.overdue.length > 0 ? "lg:grid-cols-5" : "lg:grid-cols-4"
-            }`}
-          >
-            <Stat
-              label="Open payables"
-              value={sumOf(totals.open)}
-              hint={countOf(totals.open.length, "invoice")}
-            />
-            {/* Only when something is late: "not late" is the absence of a
-                problem, and a tile reading "—" is not news anyone acts on. */}
-            {totals.overdue.length > 0 ? (
-              <Stat
-                label="Overdue"
-                value={sumOf(totals.overdue)}
-                hint={`${countOf(totals.overdue.length, "invoice")} past the due date`}
-              />
-            ) : null}
-            <Stat
-              label="Needs your judgment"
-              value={String(totals.needsYou)}
-              hint="waiting on you, not the system"
-              accent
-            />
-            <Stat
-              label="Approved"
-              value={sumOf(totals.approved)}
-              // "Ready for handoff" is a claim; when a row cannot leave yet, the
-              // tile has to stop making it.
-              hint={
-                missingRoute.length > 0
-                  ? `${countOf(missingRoute.length, "invoice")} missing a payment route`
-                  : "ready for external handoff"
-              }
-              action={
-                approved.length > 0 ? (
-                  <Button variant="outline" size="sm" className="w-full" onClick={exportHandoff}>
-                    <Download className="size-3.5" />
-                    Export CSV
-                  </Button>
-                ) : undefined
-              }
-            />
-            <Stat
-              label="Completed"
-              value={sumOf(totals.completed)}
-              hint="in history"
-              className={totals.overdue.length > 0 ? "col-span-2 lg:col-span-1" : undefined}
-            />
-          </div>
+          {/* The answer to the question the inbox is opened with, before the
+              queue: what is left, how much of it is mine, what is stuck. Pulled,
+              never pushed — nothing here arrives on its own. */}
+          <StandingSummary standing={standing} />
 
-          <Section className="mt-8">
+          <Section>
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border/50 p-4">
               <div>
-                {/* The heading names the list in view. When only Removed holds
-                    rows the tab strip is hidden (one tab offers no choice), so
-                    "Work queue" was the only label a reader had — over records
-                    that are not in the queue at all. */}
-                <p className="text-xl font-semibold tracking-tight">
+                {/* The subtitle explains the queue's role and stays stable while
+                    the reader moves between phase tabs. */}
+                <p className="text-nav-title font-semibold">
                   {active === "removed"
                     ? "Removed"
                     : active === "history"
                       ? "History"
                       : "Work queue"}
                 </p>
-                <p className="mt-0.5 text-xs text-muted-foreground">
-                  {active === "removed"
-                    ? `${countOf(removed.length, "invoice")} ${removed.length === 1 ? "waits" : "wait"} here — put any back with Restore.`
-                    : active === "history"
-                      ? "Completed invoices are archived here."
-                      : active === "inFlight"
-                        ? `${countOf(totals.inFlight, "invoice")} ${totals.inFlight === 1 ? "is" : "are"} processing.`
-                        : active === "later"
-                          ? `${countOf(totals.later, "invoice")} waiting for handoff or done.`
-                          : totals.needsYou > 0
-                            ? `${countOf(totals.needsYou, "invoice")} ${totals.needsYou === 1 ? "needs" : "need"} your judgment.`
-                            : "Nothing needs your judgment right now."}
-                </p>
+                <p className="mt-0.5 text-xs text-muted-foreground">{WORK_QUEUE_DESCRIPTION}</p>
               </div>
               {filters.length > 1 ? (
-                <div className="flex w-full max-w-full snap-x items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden rounded-lg bg-secondary/75 p-1 sm:w-auto sm:overflow-visible">
+                <div className="flex flex-wrap items-center gap-1">
                   {filters.map((f) => (
                     <button
                       key={f}
                       onClick={() => setFilter(f)}
-                      className={`shrink-0 snap-start whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-medium transition-[background-color,color,box-shadow,transform] duration-200 ease-out-expo active:scale-[0.98] ${
+                      className={`rounded-md px-4 py-2 text-xs font-medium transition-colors ${
                         active === f
-                          ? "bg-card text-foreground shadow-[0_1px_3px_rgba(0,0,0,0.08)]"
-                          : "text-muted-foreground hover:bg-card/55 hover:text-foreground"
+                          ? "bg-accent text-accent-foreground"
+                          : "text-muted-foreground hover:bg-secondary hover:text-foreground"
                       }`}
                     >
                       {filterLabel(f)}
                       {counts[f] > 0 ? (
-                        <span className="ml-1.5 rounded-full bg-background/70 px-1.5 py-0.5 font-mono text-[10px] opacity-65">
-                          {counts[f]}
-                        </span>
+                        <span className="ml-1.5 font-mono opacity-60">{counts[f]}</span>
                       ) : null}
                     </button>
                   ))}
                 </div>
               ) : null}
-              <div className="relative ml-auto w-full sm:w-64">
-                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Search vendor, number, team"
-                  className="h-9 rounded-full bg-muted pl-8 text-sm hover:bg-accent-soft"
-                />
+              <div className="ml-auto flex w-full items-center gap-2 sm:w-auto">
+                <div className="relative w-full sm:w-64">
+                  <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Search vendor, number, team"
+                    className="h-9 bg-secondary/50 pl-8 text-sm"
+                  />
+                </div>
+                {/* The narrow shell keeps its own upload trigger, so only show this
+                    adjacent copy where the shell's trigger is hidden. */}
+                <div className="hidden md:block">
+                  <UploadDialog size="sm" />
+                </div>
               </div>
             </div>
 
@@ -499,7 +368,9 @@ function Inbox() {
                     ) : (
                       <tr
                         key={inv.id}
-                        className="group border-b border-border/50 last:border-0 transition-colors hover:bg-primary/5"
+                        className={`group border-b border-border/50 last:border-0 transition-colors hover:bg-primary/5 ${
+                          attentionByInvoice.get(inv.id) ? "bg-warning/5" : ""
+                        }`}
                       >
                         <td className="px-4 py-4">
                           <div className="flex items-center gap-2.5">
@@ -540,6 +411,12 @@ function Inbox() {
                         </td>
                         <td className="px-4 py-4">
                           <div className="flex flex-wrap gap-1">
+                            {attentionByInvoice.get(inv.id) ? (
+                              <Pill variant="warning" className="gap-1">
+                                <AlertTriangle className="size-3" />
+                                {attentionByInvoice.get(inv.id)?.label}
+                              </Pill>
+                            ) : null}
                             {inv.tags.length > 0 ? (
                               inv.tags.map((t) => <TagBadge key={t} tag={t} />)
                             ) : (
@@ -592,14 +469,14 @@ function Inbox() {
                               Clear the search to see the whole list.
                             </p>
                           </>
-                        ) : active === "needsYou" ? (
-                          <p className="text-sm font-medium">
-                            Nothing needs your judgment right now.
-                          </p>
-                        ) : active === "inFlight" ? (
-                          <p className="text-sm font-medium">Nothing is processing right now.</p>
-                        ) : active === "later" ? (
-                          <p className="text-sm font-medium">Nothing is waiting for later.</p>
+                        ) : active === "draft" ? (
+                          <p className="text-sm font-medium">Nothing is waiting to be prepared.</p>
+                        ) : active === "approval" ? (
+                          <p className="text-sm font-medium">Nothing is waiting for approval.</p>
+                        ) : active === "payment" ? (
+                          <p className="text-sm font-medium">Nothing is waiting for payment.</p>
+                        ) : active === "history" ? (
+                          <p className="text-sm font-medium">Nothing has been completed yet.</p>
                         ) : (
                           <p className="text-sm font-medium">No record matches your search.</p>
                         )}

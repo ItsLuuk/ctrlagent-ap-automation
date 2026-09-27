@@ -36,25 +36,35 @@ type ReasonAction = "query" | "reject" | "reopen";
 
 const REASON_DIALOG: Record<
   ReasonAction,
-  { title: string; description: string; placeholder: string; confirm: string }
+  {
+    title: string;
+    description: string;
+    placeholder: string;
+    confirm: string;
+    /** Whether the reason is a precondition (it always is — the trail needs it). */
+    required: boolean;
+  }
 > = {
   query: {
     title: "Send this back with a question",
     description: "It stays in For approval, and your reason goes in the audit trail.",
     placeholder: "What needs checking before this is paid?",
     confirm: "Send query",
+    required: true,
   },
   reject: {
     title: "Reject this invoice",
     description: "Its status becomes Rejected, and your reason goes in the audit trail.",
     placeholder: "Why it can't be paid",
     confirm: "Reject invoice",
+    required: true,
   },
   reopen: {
     title: "Re-open this invoice",
     description: "Its status returns to For approval, and your reason goes in the audit trail.",
     placeholder: "What changed since it was approved?",
     confirm: "Re-open invoice",
+    required: true,
   },
 };
 
@@ -225,6 +235,11 @@ function ReasonDialog({
           >
             {copy.confirm}
           </Button>
+          {!ready ? (
+            <p className="text-xs text-muted-foreground">
+              {copy.required ? "A reason is required before you can send this." : "Enter a reason to confirm."}
+            </p>
+          ) : null}
         </DialogFooter>
       </DialogContent>
     </Dialog>

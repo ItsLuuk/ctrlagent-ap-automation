@@ -71,7 +71,7 @@ Rewrites of strings that ship in the app (file references included). The "before
 - ✅ After (shipped): "Invoice captured" + "{vendor} — review the extracted fields before submitting."
 - Why: names the outcome in a plain verb, then asks the manager to do the one thing only they can do. No celebration, no AI framing.
 
-**2. Document couldn't be read** · `src/components/ap/upload-dialog.tsx`, `src/lib/ap/upload-jobs.tsx`
+**2. Document couldn't be read** · `src/components/ap/upload-dialog.tsx`, `src/lib/app/upload-jobs.tsx`
 - ❌ Before: "Error: An unexpected error occurred while processing your document (E-422)."
 - ✅ After (shipped): "We couldn't read this document" + a "Review manually" path that opens the invoice for manual entry.
 - Why: owns the failure in first person, no blame, and every dead end comes with a next step.
@@ -94,7 +94,7 @@ Rewrites of strings that ship in the app (file references included). The "before
 **6. Stage label** · `src/components/ap/processing-badge.tsx`
 - ❌ Before: "Performing OCR + NLP pipeline inference"
 - ✅ After (shipped): "Matching vendor template" / "Finalizing"
-- Why: user-facing stages describe what's happening to *their invoice*, not our architecture. Jargon like "Layout OCR" is acceptable only in dev-facing logs, not labels.
+- Why: user-facing stages describe what's happening to *their invoice*, not our architecture. Extraction-engine jargon is acceptable only in dev-facing logs, not labels.
 
 ### Before / after — empty states
 
@@ -181,7 +181,7 @@ We do not say *AI magic*, *smart*, *intelligent*, or *seamless*. If the system d
 
 **This table governs copy, not code.** Identifiers may use other words on purpose: the ERP sync kind is literally `"bill"` (`SyncKind`, `syncState.bill`) because that is the ERP's vocabulary, and extraction patterns must match "supplier"/"leverancier" to find the vendor at all. Grep hits in types, comments, prompts or regexes are not violations — only strings a user can read.
 
-**Internal names that never surface.** `scheduled` displays as "Ready for handoff"; `zone`/`ZONE_*` displays as field positions; pipeline stages (`layout ocr`, `ai reading`) display as "Reading page layout" / "Reading document" via `STAGE_LABEL` in `src/lib/ap/types.ts`. **How the invoice was read** says what happened to the document — "Read from this vendor's template", "Read from the document text" — never the engine behind it (`Vision model`, `AI vision`, `Text reader`). If an identifier reaches the screen unmapped, that is a bug, not a vocabulary choice.
+**Internal names that never surface.** `scheduled` displays as "Ready for handoff"; `zone`/`ZONE_*` displays as field positions; pipeline stages (for example, `ai reading`) display as "Reading document" via `STAGE_LABEL` in `src/lib/ap/types.ts`. **How the invoice was read** says what happened to the document — "Read from this vendor's template", "Read from the document text" — never the engine behind it (`Vision model`, `AI vision`, `Text reader`). If an identifier reaches the screen unmapped, that is a bug, not a vocabulary choice.
 
 ## 5. Imagery Direction
 

@@ -86,6 +86,33 @@ describe("duplicatePeer — hard key", () => {
     expect(duplicatePeer(different, [original], profiles)).toBeUndefined();
   });
 
+  it("ignores punctuation-only changes in the invoice number", () => {
+    const original = stubInvoice("inv-1", "KPN", "INV-2026-042", 1210, "2026-01-15");
+    const duplicate = stubInvoice("inv-2", "KPN", "inv 2026 042", 1210, "2026-04-20");
+    expect(duplicatePeer(duplicate, [original], profiles)).toBe(original);
+  });
+
+  it("catches a one-character OCR error without flagging adjacent numbers", () => {
+    const original = stubInvoice("inv-1", "KPN", "ACME-2026-X1", 1210, "2026-01-15");
+    const typo = stubInvoice("inv-2", "KPN", "ACME-2026-Y1", 1210, "2026-04-20");
+    const sequential = stubInvoice("inv-3", "KPN", "ACME-2026-X2", 1210, "2026-04-20");
+    expect(duplicatePeer(typo, [original], profiles)).toBe(original);
+    expect(duplicatePeer(sequential, [original], profiles)).toBeUndefined();
+  });
+
+  it("does not flag when the amount is outside the one-percent tolerance", () => {
+    const original = stubInvoice("inv-1", "KPN", "2026-001", 100, "2026-01-15");
+    const differentAmount = stubInvoice("inv-2", "KPN", "2026-001", 102, "2026-04-20");
+    expect(duplicatePeer(differentAmount, [original], profiles)).toBeUndefined();
+  });
+
+  it("re-checks numbered invoices against paid history across periods", () => {
+    const paid = stubInvoice("paid-1", "KPN", "2026-001", 100, "2026-01-15");
+    paid.status = "paid";
+    const reupload = stubInvoice("new-1", "KPN", "2026-001", 100, "2026-04-20");
+    expect(duplicatePeer(reupload, [paid], profiles)).toBe(paid);
+  });
+
   it("does not flag when vendor differs", () => {
     const original = stubInvoice("inv-1", "KPN", "2026-001", 100, "2026-04-01");
     const differentVendor = stubInvoice("inv-2", "Acme Corp", "2026-001", 100, "2026-04-01");

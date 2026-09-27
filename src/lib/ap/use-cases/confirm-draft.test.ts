@@ -6,7 +6,7 @@ import {
   type DraftFields,
   type DraftPersistencePorts,
 } from "./confirm-draft";
-import { ZONE_FIELDS, type Invoice, type LineItemsSpec, type VendorTemplate } from "../types";
+import { MAPPING_FIELDS, type Invoice, type LineItemsSpec, type VendorTemplate } from "../types";
 import type { Actor } from "../state-machine";
 
 /** Whoever is confirming: the use case is told, it never decides for itself. */
@@ -28,7 +28,7 @@ const fields: DraftFields = {
 };
 
 const emptyAssignments = Object.fromEntries(
-  ZONE_FIELDS.map((field) => [field, undefined]),
+  MAPPING_FIELDS.map((field) => [field, undefined]),
 ) as DraftAssignments;
 
 const invoice: Invoice = {
@@ -85,7 +85,10 @@ function ports(overrides: Partial<DraftPersistencePorts> = {}) {
       return { accepted: true };
     },
     confirmTemplateExtraction: (vendor) => calls.heldVendors.push(vendor),
-    upsertVendor: (vendor) => calls.vendors.push(vendor),
+    upsertVendor: (vendor) => {
+      calls.vendors.push(vendor);
+      return { accepted: true };
+    },
     ...overrides,
   };
   return { ports: base, calls };
@@ -126,6 +129,86 @@ describe("confirmDraft", () => {
     expect(calls.vendors[0]?.updatedAt).toBe("2026-01-21T00:00:00.000Z");
   });
 
+  it("confirms from the profiling stage with the profiling transition", () => {
+    const applied: string[] = [];
+    const { ports: storePorts } = ports({
+      applyTransition: (id, input) => {
+        applied.push(input.transition);
+        return { accepted: true };
+      },
+    });
+    const result = confirmDraft(
+      {
+        invoice: { ...invoice, status: "vendor_profile" },
+        fields,
+        assignments: emptyAssignments,
+        words: [],
+        actor: operator,
+        profile: { name: "Acme B.V.", email: "billing@acme.test", updatedAt: "old" },
+      },
+      storePorts,
+    );
+
+    expect(result).toMatchObject({ ok: true, profileSaved: true });
+    // A first-time vendor is mapped and confirmed in one pass, so the invoice
+    // never has to sit in Draft.
+    expect(applied).toEqual(["confirm-from-profiling"]);
+  });
+
+  it("derives the vendor record from the mapped identity when profiling", () => {
+    const { ports: storePorts, calls } = ports();
+    const result = confirmDraft(
+      {
+        invoice: {
+          ...invoice,
+          status: "vendor_profile",
+          vendor: "Acme B.V.",
+          vendorEmail: "billing@acme.test",
+          iban: "nl91 abna 0417 1643 00",
+        },
+        fields: { ...fields, vendor: "Acme B.V." },
+        assignments: emptyAssignments,
+        words: [],
+        actor: operator,
+      },
+      storePorts,
+    );
+
+    expect(result).toMatchObject({ ok: true, profileSaved: true });
+    expect(calls.vendors[0]).toMatchObject({
+      name: "Acme B.V.",
+      email: "billing@acme.test",
+      // Case is normalised on the way into the record, not kept from the OCR.
+      iban: "NL91ABNA0417164300",
+    });
+  });
+
+  it("stops the confirm when the vendor record is refused", () => {
+    const { ports: storePorts, calls } = ports({
+      upsertVendor: () => ({
+        accepted: false,
+        reason: "Bank details are pending approval by a different person.",
+      }),
+    });
+    const result = confirmDraft(
+      {
+        invoice: { ...invoice, status: "vendor_profile" },
+        fields,
+        assignments: emptyAssignments,
+        words: [],
+        actor: operator,
+      },
+      storePorts,
+    );
+
+    expect(result).toMatchObject({ ok: false, kind: "persistence-rejected" });
+    if (!result.ok) {
+      expect(result.message).toContain("pending approval");
+    }
+    // Nothing moved: a refused record must not leave the invoice in approval.
+    expect(calls.transitions).toEqual([]);
+  });
+
   it("saves learned anchors and zones before confirming a mapped draft", () => {
     const { ports: storePorts, calls } = ports();
     const assignments: DraftAssignments = {
@@ -155,6 +238,65 @@ describe("confirmDraft", () => {
       auditAction: "Template updated",
       patch: { zones: { vendor: { x: 0.1, y: 0.2, w: 0.3, h: 0.04 } } },
     });
+  });
+
+  it("blocks an unconfirmed critical proposal before writing a template", () => {
+    const { ports: storePorts, calls } = ports();
+    const assignments: DraftAssignments = {
+      ...emptyAssignments,
+      vendor: {
+        field: "vendor",
+        zone: { x: 0.1, y: 0.2, w: 0.3, h: 0.04 },
+        proposal: {
+          field: "vendor",
+          zone: { x: 0.1, y: 0.2, w: 0.3, h: 0.04 },
+          confidence: 0.96,
+          source: "label",
+          reason: "Matched the Van label",
+        },
+      },
+    };
+    const result = confirmDraft(
+      { invoice, fields, assignments, words: [], actor: operator },
+      storePorts,
+    );
+
+    expect(result).toMatchObject({ ok: false, kind: "blocked" });
+    expect(calls.savedTemplates).toHaveLength(0);
+    expect(calls.transitions).toHaveLength(0);
+  });
+
+  it("saves a first reviewed template with two training-wheel confirmations", () => {
+    const { ports: storePorts, calls } = ports();
+    const zone = { x: 0.1, y: 0.2, w: 0.3, h: 0.04 };
+    const assignments: DraftAssignments = {
+      ...emptyAssignments,
+      vendor: {
+        field: "vendor",
+        zone,
+        proposal: {
+          field: "vendor",
+          zone,
+          confidence: 0.96,
+          source: "label",
+          reason: "Matched the Van label",
+        },
+      },
+    };
+    const result = confirmDraft(
+      {
+        invoice,
+        fields,
+        assignments,
+        words: [],
+        confirmedMappings: { vendor: true },
+        actor: operator,
+      },
+      storePorts,
+    );
+
+    expect(result).toMatchObject({ ok: true, templateAction: "saved" });
+    expect(calls.savedTemplates[0]).toMatchObject({ confirmNextCount: 2, origin: "confirmed" });
   });
 
   it("returns a blocked result without writing or transitioning", () => {

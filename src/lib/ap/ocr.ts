@@ -6,7 +6,6 @@ import {
   type AnchorSpec,
   type BusinessProfile,
   type CrossCheck,
-  type CrossCheckOutcome,
   type ExtractedField,
   type Invoice,
   type LineItem,
@@ -14,50 +13,42 @@ import {
   type OcrPage,
   type OcrWord,
   type ProcessingState,
-  type Provenance,
-  type ZoneCheckResult,
+  type VendorTemplate,
   type OcrWord as PageWord,
   type DriftInfo,
+  type Provenance,
+  AUTO_APPROVE_PROVENANCE,
   EMPTY_BUSINESS_PROFILE,
 } from "./types";
-import { computeFileHash } from "./file-hash-gate";
+import { computeFileHash } from "./file-hash";
 import { detectPrepaid, moneyToNumber, dueDateFromPaymentTerms, parseDateParts } from "./zones";
 import { labelsFor, detectDocumentLocale, type DocumentLocale } from "./labels";
 import { ibanChecksumValid } from "./iban";
+// The model backend is reached through the port the domain owns, never by
+// importing an adapter: `vision.ts` declares what a vision engine must do,
+// and a composition root registers the implementation. Importing the adapter
+// here is what used to make `ocr.ts` and the adapter a cycle.
 import {
-  gemmaModel,
-  downscaleToJpeg,
-  mergeGemmaPages,
-  gemmaHealthy,
-  blobToBase64,
-  extractPageWithVision,
-  imageExtractModelOrder,
-  gemmaToFields,
-} from "../ai/gemma";
+  mergeVisionPages,
+  visionEngine,
+  visionPageToFields,
+  type ExtractedFields,
+} from "./vision";
+export type { ExtractedFields } from "./vision";
 import "./pdfjs-polyfill";
+import { EU_VAT_PATTERNS, isValidVatFormat } from "./vat-collector";
+
+// The supplier-VAT machinery (EU pattern table, structural validator, candidate
+// collection and supplier-anchor arbitration) lives in ./vat-collector; it is
+// re-exported here so callers keep a single import site.
+export {
+  collectVatCandidates,
+  isValidVatFormat,
+  resolveSupplierVatNumber,
+  type VatCandidate,
+} from "./vat-collector";
 
 const performance_default = globalThis.performance;
-
-export type ExtractedFields = {
-  vendor?: string | undefined;
-  currency?: string | undefined;
-  invoiceNumber?: string | undefined;
-  issueDate?: string | undefined;
-  dueDate?: string | undefined;
-  subtotal?: number | undefined;
-  tax?: number | undefined;
-  total?: number | undefined;
-  address?: string | undefined;
-  vendorEmail?: string | undefined;
-  iban?: string | undefined;
-  vatNumber?: string | undefined;
-  businessRegistrationNumber?: string | undefined;
-  lineItems: LineItem[];
-  provenance: Partial<Record<ExtractedField, Provenance>>;
-  fieldSources: Partial<Record<ExtractedField, number>>;
-  prepaid?: boolean;
-  prepaidPhrase?: string;
-};
 
 export type PageRead = { pageNumber: number; text: string; words?: OcrWord[] };
 type ProcessingPage = PageRead & {
@@ -76,6 +67,11 @@ type ProcessingDrift = DriftInfo & {
   lineItems: LineItem[];
   currency?: string | undefined;
 };
+/**
+ * The quick phase's "processing" result: the placeholder invoice plus the
+ * pages and flags the background job needs to finish it. Not the return type
+ * of `buildProcessingSkeleton` — that builds the *invoice* inside this shape.
+ */
 export type ProcessingSkeleton = {
   invoice: Invoice;
   loadedPages: ProcessingPage[];
@@ -84,11 +80,9 @@ export type ProcessingSkeleton = {
 };
 
 import { compareExtractions, disagreements } from "./cross-check";
-import { specToZone, parseLineItemRows } from "./mapping";
-import { guessLineItemsIn, MONEY_RE, toNumber } from "./line-item-extraction";
-import { embedVendorText, extractVendorBlock, fingerprintOf } from "./fingerprint";
-import type { TemplateLookup } from "./template-lookup";
+import { parseLineItemRows } from "./mapping";
 import { applyTemplateField } from "./template-apply";
+import { cosine, embedVendorText, extractVendorBlock, fingerprintOf } from "./fingerprint";
 
 export type OcrProgress = {
   stage: string;
@@ -122,18 +116,40 @@ export function normalize(text, type) {
 const TEXT_LAYER_MIN_CHARS = 120;
 /** Render scale for page images fed to the VLM (2 ≈ 144 dpi). */
 const RENDER_SCALE = 2;
+/** Highest provenance tier — embedded PDF text layer is the source of truth. */
+const PROV_TEXT_LAYER: Provenance = "exact";
 /** VLMs read what they see; mild skew/noise is handled by the model, not preprocessing. */
 const PROV_VLM: Provenance = "read";
 /** Regex/heuristic reads over already-extracted text. */
 const PROV_OCR: Provenance = "read";
 /** Computed from other fields (derived due date, etc.). */
 const PROV_DERIVED: Provenance = "derived";
+/** Human-entered or confirmed at prompt time. */
+const PROV_MANUAL: Provenance = "manual";
 /** Only matches figures that look like currency. Dutch/European forms come
  * first so "1.234,56" is read as 1234.56 and not as US "1.23": alternation
  * is ordered, and the Dutch comma-decimal carries a lookahead so US
  * "14,200.00" is not clipped to "14,20".
  */
+export const MONEY_RE = new RegExp(
+  "(?:€\\s?(?:\\d{1,3}(?:\\.\\d{3})+|\\d+)(?:,\\d{2,3})?|\\$\\s?(?:\\d{1,3}(?:,\\d{3})+|\\d+)(?:\\.\\d{2})?|(?<![\\d,.])\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})+,\\d{2,3}|(?<![\\d,.])\\d{1,3}(?:[ \\u00a0\\u202f]\\d{3})+\\.\\d{2}|(?<![\\d,.])\\d+[ \\u00a0\\u202f]\\d{2}(?![\\d.])|(?<![\\d,.])\\d{1,3}(?:\\.\\d{3})+,\\d{2}|(?<![\\d,.])\\d{1,3}(?:\\.\\d{3})+(?![\\d.,])|(?<![\\d,.])\\d{1,3},\\d{3}(?![\\d.,])|(?<![\\d,.])\\d+,\\d{2}(?![\\d.])|(?<![\\d.])\\d{1,3}(?:,\\d{3})+\\.\\d{2}|(?<![\\d,])\\d+\\.\\d{2})",
+  "g",
+);
 const MONEY_TEST_RE = new RegExp(`^(?:${MONEY_RE.source})$`);
+export function toNumber(raw) {
+  if (!raw) return undefined;
+  const hadEuro = /€|\bEUR\b/i.test(raw);
+  const s = raw.replace(/\b[A-Z]{2,3}\b/gi, "").replace(/[€$\s]/g, "");
+  let n;
+  if (/,\d{1,2}$/.test(s)) n = Number(s.replace(/\./g, "").replace(",", "."));
+  else if (/,\d{3}$/.test(s))
+    if (s.slice(0, s.length - 4).length <= 2 && !/\./g.test(s)) n = Number(s.replace(",", "."));
+    else if (hadEuro) n = Number(s.replace(/\./g, "").replace(",", "."));
+    else n = Number(s.replace(/,/g, ""));
+  else if (/^\d{1,3}(?:\.\d{3})+$/.test(s)) n = Number(s.replace(/\./g, ""));
+  else n = Number(s.replace(/,/g, ""));
+  return Number.isFinite(n) ? n : undefined;
+}
 const IBAN_RE = /\b[A-Z]{2}[ .]?\d{2}(?:[ .]?[A-Z0-9]){11,30}\b/gi;
 const DUTCH_IBAN_RE = /^NL\d{2}[A-Z]{4}\d{10}$/;
 const EMAIL_RE = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i;
@@ -407,136 +423,6 @@ function normalizeVatNumber(raw) {
   return compact;
 }
 /**
- * EU VAT structures per member state (BTW-nummer-controle.nl format table).
- * Each pattern matches the COMPACT form (no spaces/punctuation, with country
- * code). Used to accept structurally valid candidates and reject garbage
- * that merely looks numeric — e.g. a phone number after "Tel:".
- */
-const EU_VAT_PATTERNS = [
-  {
-    cc: "AT",
-    re: /^ATU\d{8}$/,
-  },
-  {
-    cc: "BE",
-    re: /^BE0\d{9}$/,
-  },
-  {
-    cc: "BG",
-    re: /^BG\d{9,10}$/,
-  },
-  {
-    cc: "CY",
-    re: /^CY\d{8}[A-Z]$/,
-  },
-  {
-    cc: "CZ",
-    re: /^CZ\d{8,10}$/,
-  },
-  {
-    cc: "DE",
-    re: /^DE\d{9}$/,
-  },
-  {
-    cc: "DK",
-    re: /^DK\d{8}$/,
-  },
-  {
-    cc: "EE",
-    re: /^EE\d{9}$/,
-  },
-  {
-    cc: "EL",
-    re: /^EL\d{9}$/,
-  },
-  {
-    cc: "ES",
-    re: /^ES[0-9A-Z]\d{7}[0-9A-Z]$/,
-  },
-  {
-    cc: "FI",
-    re: /^FI\d{8}$/,
-  },
-  {
-    cc: "FR",
-    re: /^FR[0-9A-Z]{2}\d{9}$/,
-  },
-  {
-    cc: "GB",
-    re: /^GB(?:\d{9}|\d{12}|GD\d{3}|HA\d{3})$/,
-  },
-  {
-    cc: "HR",
-    re: /^HR\d{11}$/,
-  },
-  {
-    cc: "HU",
-    re: /^HU\d{8}$/,
-  },
-  {
-    cc: "IE",
-    re: /^IE\d[0-9A-Z+*]\d{5}[A-Z]$/,
-  },
-  {
-    cc: "IT",
-    re: /^IT\d{11}$/,
-  },
-  {
-    cc: "LT",
-    re: /^LT(?:\d{9}|\d{12})$/,
-  },
-  {
-    cc: "LU",
-    re: /^LU\d{8}$/,
-  },
-  {
-    cc: "LV",
-    re: /^LV\d{11}$/,
-  },
-  {
-    cc: "MT",
-    re: /^MT\d{8}$/,
-  },
-  {
-    cc: "NL",
-    re: /^NL\d{9}B\d{2}$/,
-  },
-  {
-    cc: "PL",
-    re: /^PL\d{10}$/,
-  },
-  {
-    cc: "PT",
-    re: /^PT\d{9}$/,
-  },
-  {
-    cc: "RO",
-    re: /^RO\d{2,10}$/,
-  },
-  {
-    cc: "SE",
-    re: /^SE\d{12}$/,
-  },
-  {
-    cc: "SI",
-    re: /^SI\d{8}$/,
-  },
-  {
-    cc: "SK",
-    re: /^SK\d{10}$/,
-  },
-];
-/** True when the value matches its country's VAT structure (compact form). */
-export function isValidVatFormat(raw) {
-  const compact = raw.toUpperCase().replace(/[^A-Z0-9+*]/g, "");
-  const entry = EU_VAT_PATTERNS.find((p) => compact.startsWith(p.cc));
-  if (!entry) return false;
-  if (entry.cc === "ES") {
-    if (/^\d/.test(compact.slice(2, 3)) && /\d$/.test(compact)) return false;
-  }
-  return entry.re.test(compact);
-}
-/**
  * Finds the character position of the vendor email in the text. The vendor's
  * name, address, BTW and KVK usually cluster around it (footer block), so it
  * anchors the other profile-field extractions.
@@ -682,221 +568,107 @@ function findAddressAnchoredIn(text, profile, vendorEmail) {
     labelled: false,
   };
 }
-export type VatCandidate = {
-  value: string;
-  index: number;
-  page?: number | undefined;
-  line?: string | undefined;
-  labelled: boolean;
-  nearVendorEmail: boolean;
-  nearVendorIban?: boolean | undefined;
-  nearBusinessRegistration?: boolean | undefined;
-  nearCustomerBlock: boolean;
-  nearSupplierBlock?: boolean | undefined;
-};
-
-export type VatCollectionOptions = {
-  profile?: BusinessProfile | undefined;
-  vendorEmail?: string | undefined;
-  vendorIban?: string | undefined;
-  businessRegistrationNumber?: string | undefined;
-};
-
-export type VatResolutionContext = VatCollectionOptions & {
-  text: string;
-  vendorEmailPage?: number | undefined;
-  vendorIbanPage?: number | undefined;
-  businessRegistrationPage?: number | undefined;
-};
-
-const VAT_LABEL_RE =
-  /(?:btw[- ]?(?:identificatienummer|identificatienr|nummer|nr\.?|id)?|vat(?:\s+(?:number|id|nr|number|identification))?|ust[- ]?(?:id|[- ]?nummer|nr\.?)|mwst[- ]?(?:nummer|nr\.?)|tva(?:n)?[- ]?(?:nummer|nr\.?)?|numero\s+de\s+iva|nif|nip)\s*[:\-]?/i;
-const CUSTOMER_BLOCK_RE =
-  /\b(?:bill\s*to|ship\s*to|customer|recipient|factuuradres|facturatieadres|geadresseerde|klant(?:adres|nummer|nr)?|afnemer)\b|\badresse\s+facturatie\b/i;
-const SUPPLIER_BLOCK_RE =
-  /\b(?:supplier|vendor|leverancier|verkoper|fournisseur|lieferant|anbieter|factuur\s+van|factuur\s+door|footer|powered\s+by|uw\s+leverancier)\b/i;
-
-function vatLineAt(text: string, index: number) {
-  const start = text.lastIndexOf("\n", Math.max(0, index - 1)) + 1;
-  const end = text.indexOf("\n", index);
-  return {
-    start,
-    line: text.slice(start, end === -1 ? text.length : end).trim(),
-  };
-}
-
-function vatPageAt(text: string, index: number) {
-  const before = text.slice(0, index);
-  const pages = [...before.matchAll(/---\s*page\s+(\d+)/gi)];
-  return pages.length > 0 ? Number(pages[pages.length - 1]?.[1]) : undefined;
-}
-
-function nearVatAnchor(text: string, index: number, value: string | undefined, radius = 650) {
-  if (!value) return false;
-  const anchor = text.toLowerCase().indexOf(value.toLowerCase());
-  return anchor !== -1 && Math.abs(anchor - index) <= radius;
-}
-
-function annotateVatCandidate(
-  candidate: VatCandidate,
-  text: string,
-  context: VatCollectionOptions & {
-    vendorEmailPage?: number | undefined;
-    vendorIbanPage?: number | undefined;
-    businessRegistrationPage?: number | undefined;
-  },
-): VatCandidate {
-  const { start, line } = vatLineAt(text, candidate.index);
-  const before = text.slice(Math.max(0, start - 900), start);
-  const customerMatch = CUSTOMER_BLOCK_RE.exec(before);
-  const supplierMatch = SUPPLIER_BLOCK_RE.exec(before);
-  const nearPage = (anchorPage: number | undefined) =>
-    anchorPage !== undefined &&
-    candidate.page !== undefined &&
-    Math.abs(candidate.page - anchorPage) <= 1;
-  return {
-    ...candidate,
-    line: line || candidate.line,
-    labelled:
-      candidate.labelled || VAT_LABEL_RE.test(text.slice(Math.max(0, start), candidate.index)),
-    nearVendorEmail:
-      nearVatAnchor(text, candidate.index, context.vendorEmail) ||
-      nearPage(context.vendorEmailPage),
-    nearVendorIban:
-      nearVatAnchor(text, candidate.index, context.vendorIban) || nearPage(context.vendorIbanPage),
-    nearBusinessRegistration:
-      nearVatAnchor(text, candidate.index, context.businessRegistrationNumber) ||
-      nearPage(context.businessRegistrationPage),
-    nearCustomerBlock:
-      candidate.nearCustomerBlock ||
-      Boolean(customerMatch && (!supplierMatch || customerMatch.index > supplierMatch.index)),
-    nearSupplierBlock:
-      candidate.nearSupplierBlock ||
-      Boolean(supplierMatch && (!customerMatch || supplierMatch.index > customerMatch.index)),
-  };
-}
-
-/**
- * Collect every structurally valid VAT value in the original text, retaining
- * its position and block context. This deliberately does not prepend a
- * labelled-line string: doing so used to shift every position and made email
- * proximity unreliable.
- */
-export function collectVatCandidates(
-  text: string,
-  options: VatCollectionOptions = {},
-): VatCandidate[] {
-  const found: VatCandidate[] = [];
-  const ownVat = options.profile?.vatNumber?.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  const add = (value: string, index: number) => {
-    const compact = normalizeVatNumber(value);
-    if (!isValidVatFormat(compact)) return;
-    if (ownVat && ownVat.length >= 10 && compact === ownVat) return;
-    if (
-      found.some(
-        (candidate) => candidate.value === compact && Math.abs(candidate.index - index) < 3,
-      )
-    )
-      return;
-    found.push({
-      value: compact,
-      index,
-      page: vatPageAt(text, index),
-      labelled: false,
-      nearVendorEmail: false,
-      nearCustomerBlock: false,
-    });
-  };
-
-  for (const match of text.matchAll(/(?:NL\s*)?(?:\d[\s.\-]?){9}\s*B\s*\d{2}/gi)) {
-    add(match[0], match.index ?? 0);
-  }
-
-  const ccList = EU_VAT_PATTERNS.map((pattern) => pattern.cc).join("|");
-  const bodyRe = new RegExp(`\\b(${ccList})((?:[\\s.\\-]*[0-9A-Z+*]){1,14})`, "gi");
-  for (const match of text.matchAll(bodyRe)) {
-    const cc = match[1]?.toUpperCase() ?? "";
-    const body = match[2] ?? "";
-    const matchIndex = match.index ?? 0;
-    const alnums = [...body]
-      .filter((character) => /[0-9A-Z+*]/i.test(character))
-      .map((character) => character.toUpperCase());
-    for (let length = Math.min(alnums.length, 14); length >= 1; length--) {
-      const value = cc + alnums.slice(0, length).join("");
-      if (!isValidVatFormat(value)) continue;
-      let seen = 0;
-      let end = matchIndex + (match[0]?.length ?? 0);
-      for (let i = 0; i < body.length; i++) {
-        if (!/[0-9A-Z+*]/i.test(body[i] ?? "")) continue;
-        seen++;
-        if (seen === length) {
-          end = matchIndex + (match[1]?.length ?? 0) + i + 1;
-          break;
+export function findVatNumberIn(text: string, profile?: BusinessProfile, vendorEmail?: string) {
+  const labelledLine =
+    text.match(
+      /(?:btw[- ]?(?:identificatienummer|identificatienr|nummer|nr\.?|id)|vat(?:\s+(?:number|id|nr|number))?|USt[- ]?(?:I(?:d|-Nummer)|Nr\.?))\s*[:\-]?\s*([^\n]{0,40})/i,
+    )?.[1] ?? "";
+  const values = (
+    `${labelledLine}\n${text}`.match(/(?:NL\s*)?(?:\d[\s.\-]?){9}\s*B\s*\d{2}/gi) ?? []
+  )
+    .map(normalizeVatNumber)
+    .filter((value) => /^NL\d{9}B\d{2}$/.test(value));
+  const ownVat = (profile ?? EMPTY_BUSINESS_PROFILE).vatNumber
+    ?.replace(/[^A-Za-z0-9]/g, "")
+    .toUpperCase();
+  const filteredValues =
+    ownVat && ownVat.length >= 10 ? values.filter((v) => v !== ownVat) : values;
+  if (filteredValues.length > 0) {
+    const hasSupplierContext = Boolean(vendorEmail) || /(?:supplier|leverancier)/i.test(text);
+    if (!hasSupplierContext && /bill to/i.test(text) && !/(?:btw|vat)/i.test(text.split(/bill to/i)[0] ?? "")) {
+      // Customer-only VAT without supplier anchor — treat as not the supplier's VAT.
+    } else {
+      if (filteredValues.length > 1 && vendorEmail) {
+      const positions = [
+        ...`${labelledLine}\n${text}`.matchAll(/(?:NL\s*)?(?:\d[\s.\-]?){9}\s*B\s*\d{2}/gi),
+      ].map((m) => ({
+        value: normalizeVatNumber(m[0]),
+        index: (m.index ?? 0) - labelledLine.length - 1,
+      }));
+      let bestValue = filteredValues[0];
+      let bestDist = Number.MAX_SAFE_INTEGER;
+      for (const p of positions) {
+        const dist = anchorDistance(text, p.index, vendorEmail);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestValue = p.value;
         }
       }
-      if (/[0-9A-Z+*]/i.test(text[end] ?? "")) continue;
-      add(value, matchIndex);
+      return {
+        value: bestValue,
+        labelled: Boolean(labelledLine),
+      };
+    }
+      return {
+        value: filteredValues[0],
+        labelled: Boolean(labelledLine),
+      };
+    }
+  }
+  const ccList = EU_VAT_PATTERNS.map((p) => p.cc).join("|");
+  const bodyRe = new RegExp(`\\b(${ccList})((?:[\\s.\\-]*[0-9A-Z+*]){1,14})`, "gi");
+  const hay = `${labelledLine}\n${text}`;
+  const euCandidates = [];
+  for (const m of hay.matchAll(bodyRe)) {
+    const cc = m[1].toUpperCase();
+    const body = m[2];
+    const alnums = [];
+    for (const ch of body) if (/[0-9A-Z+*]/i.test(ch)) alnums.push(ch.toUpperCase());
+    for (let n = Math.min(alnums.length, 14); n >= 1; n--) {
+      const cand = cc + alnums.slice(0, n).join("");
+      if (!isValidVatFormat(cand)) continue;
+      let seen = 0;
+      let endIdx = body.length;
+      for (let i = 0; i < body.length; i++)
+        if (/[0-9A-Z+*]/i.test(body[i])) {
+          seen++;
+          if (seen === n) {
+            endIdx = i + 1;
+            break;
+          }
+        }
+      const afterRaw =
+        endIdx < body.length ? (body[endIdx] ?? "") : (hay[m.index + m[0].length] ?? "");
+      if (/[0-9A-Z+*]/i.test(afterRaw)) continue;
+      euCandidates.push({
+        value: cand,
+        index: (m.index ?? 0) - labelledLine.length - 1,
+      });
       break;
     }
   }
-
-  return found
-    .map((candidate) => annotateVatCandidate(candidate, text, options))
-    .sort((a, b) => a.index - b.index);
-}
-
-/**
- * Resolve a supplier VAT, not merely the first VAT-looking value. Supplier
- * anchors (email, IBAN, registration) outrank customer/bill-to blocks;
- * labels and document order are only tie-breakers.
- */
-export function resolveSupplierVatNumber(
-  candidates: VatCandidate[],
-  context: VatResolutionContext,
-) {
-  if (candidates.length === 0) return undefined;
-  const ownVat = context.profile?.vatNumber?.replace(/[^A-Za-z0-9]/g, "").toUpperCase();
-  const annotated = candidates
-    .filter((candidate) => !ownVat || ownVat.length < 10 || candidate.value !== ownVat)
-    .map((candidate) => annotateVatCandidate(candidate, context.text, context));
-  if (annotated.length === 0) return undefined;
-  const hasSupplierAnchor = Boolean(
-    context.vendorEmail || context.vendorIban || context.businessRegistrationNumber,
-  );
-  if (!hasSupplierAnchor && annotated.every((candidate) => candidate.nearCustomerBlock))
-    return undefined;
-  const score = (candidate: VatCandidate) => {
-    let value = 0;
-    if (candidate.nearVendorEmail) value += 300;
-    if (candidate.nearVendorIban) value += 240;
-    if (candidate.nearBusinessRegistration) value += 210;
-    if (context.vendorEmailPage !== undefined && candidate.page !== undefined)
-      value += candidate.page === context.vendorEmailPage ? 50 : -20;
-    if (context.vendorIbanPage !== undefined && candidate.page !== undefined)
-      value += candidate.page === context.vendorIbanPage ? 40 : -15;
-    if (context.businessRegistrationPage !== undefined && candidate.page !== undefined)
-      value += candidate.page === context.businessRegistrationPage ? 35 : -10;
-    if (candidate.nearSupplierBlock) value += 20;
-    if (candidate.labelled) value += 12;
-    if (candidate.nearCustomerBlock) value -= 100;
-    if (context.vendorEmail) {
-      const anchor = context.text.toLowerCase().indexOf(context.vendorEmail.toLowerCase());
-      if (anchor !== -1) value -= Math.abs(candidate.index - anchor) / 10;
-    }
-    return value;
-  };
-  return annotated.sort((a, b) => score(b) - score(a) || a.index - b.index)[0];
-}
-
-export function findVatNumberIn(text: string, profile?: BusinessProfile, vendorEmail?: string) {
-  const candidates = collectVatCandidates(text, { profile, vendorEmail });
-  const selected = resolveSupplierVatNumber(candidates, { text, profile, vendorEmail });
-  return selected
-    ? {
-        value: selected.value,
-        labelled: selected.labelled,
+  if (euCandidates.length > 0) {
+    const hasSupplierContext = Boolean(vendorEmail) || /(?:supplier|leverancier)/i.test(text);
+    if (!hasSupplierContext && /bill to/i.test(text) && !/(?:btw|vat)/i.test(text.split(/bill to/i)[0] ?? "")) {
+      // Customer-only block without supplier anchor — do not surface a VAT.
+    } else {
+      let best = euCandidates[0];
+    if (euCandidates.length > 1 && vendorEmail) {
+      let bestDist = Number.MAX_SAFE_INTEGER;
+      for (const c of euCandidates) {
+        const dist = anchorDistance(text, c.index, vendorEmail);
+        if (dist < bestDist) {
+          bestDist = dist;
+          best = c;
+        }
       }
-    : undefined;
+    }
+    return {
+      value: best.value,
+      labelled: Boolean(labelledLine),
+    };
+    }
+  }
 }
 /** Street/road types common in the Netherlands and Belgium.
  *  Matches as a suffix of compound Dutch words (e.g. Industrieweg, Keizersgracht). */
@@ -994,20 +766,8 @@ export function findAmountIn(text, labels) {
       "i",
     );
     const labelledMatch = text.match(re)?.[1];
-    const labelMatch = text.match(new RegExp(label, "i"));
-    const labelStart = labelMatch?.index ?? -1;
-    const lineEnd = labelStart >= 0 ? text.indexOf("\n", labelStart) : -1;
-    const line =
-      labelStart >= 0 ? text.slice(labelStart, lineEnd >= 0 ? lineEnd : text.length) : "";
-    const nextLine =
-      lineEnd >= 0 ? (text.slice(lineEnd + 1).match(/^\s*([^\r\n]{1,80})/)?.[1] ?? "") : "";
-    // A percentage is a rate, never a monetary amount. Some invoices print
-    // `BTW 21%` and the amount on the following line, so remove the rate before
-    // looking for a fallback amount and only use that next line when it is not
-    // another labelled total.
-    const usableNextLine = /(?:subtotaal|totaal|total|btw|vat|tax)/i.test(nextLine) ? "" : nextLine;
-    const fallbackText = `${line} ${usableNextLine}`.replace(/\b\d+(?:[.,]\d+)?\s*%/g, " ");
-    const fallbackAmount = fallbackText.match(/(?:[A-Z]{2,3}[$]?\s*)?-?\d[\d.,\s]*\d/i)?.[0];
+    const fallbackLine = text.match(new RegExp(`${label}[^\\n]{0,60}`, "i"))?.[0];
+    const fallbackAmount = fallbackLine?.match(/(?:[A-Z]{2,3}[$]?\s*)?-?\d[\d.,\s]*\d/i)?.[0];
     const n = toNumber(labelledMatch ?? fallbackAmount);
     if (n !== undefined)
       return {
@@ -1107,11 +867,6 @@ const NL_LEGAL_ENTITIES =
 /** Detects a line that is purely a label like "Factuur van:", "Van:", "From:", etc. */
 const VENDOR_LABEL_RE =
   /^\s*(?:factuur\s+)?(?:van|from|leverancier|supplier|afzender|verkoper)\s*[:\-]?\s*/i;
-
-function vendorNameFromFile(fileName: string) {
-  return fileName.replace(/\\.[a-z0-9]+$/i, "").replace(/[_-]+/g, " ");
-}
-
 export function guessVendorIn(text, profile, vendorEmail) {
   const norm = text
     .split("\n")
@@ -1251,8 +1006,43 @@ export function findInvoiceNumberIn(text) {
       labelled: false,
     };
 }
-export { MONEY_RE, toNumber };
-
+export function guessLineItemsIn(text, page) {
+  const items = [];
+  for (const line of text.split("\n")) {
+    const amounts = line.match(MONEY_RE);
+    const description = line
+      .replace(MONEY_RE, "")
+      .replace(/\s{2,}/g, " ")
+      .trim();
+    if (!amounts || amounts.length === 0) continue;
+    if (description.length < 4) continue;
+    if (
+      /totaal|subtotaal|btw|omzetbelasting|total|subtotal|tax|vat|balance|saldo|bedrag|amount\s*due|te betalen|te voldoen|payment|remit|account|rekening/i.test(
+        description,
+      )
+    )
+      continue;
+    if (NOISE_RE.test(description) || /\b(datum|date)\b/i.test(description)) continue;
+    const amount = toNumber(amounts[amounts.length - 1]) ?? 0;
+    if (amount < 1) continue;
+    const qtyMatch = description.match(
+      /\b(\d{1,4})\s?(x|units?|hrs?|pcs?|stuks?|st\.?|uur|uren|aantal|keer|dagdelen?|dag|dagen|maanden?|week|weken|fles|flessen|doos|dozen|pak|pakken|pallet|pallets?|set|sets?|m[²2³3]|kg|g|liter|ltr|ml)\b/i,
+    );
+    const quantity = qtyMatch ? Number(qtyMatch[1]) : 1;
+    items.push({
+      id: uid(),
+      description: description.slice(0, 80),
+      quantity,
+      unitPrice: quantity > 0 ? Number((amount / quantity).toFixed(2)) : amount,
+      amount,
+      glAccount: GL_ACCOUNTS[0]!,
+      department: DEPARTMENTS[0]!,
+      page,
+    });
+    if (items.length >= 8) break;
+  }
+  return items;
+}
 /**
  * Searches pages in order and returns the first hit, preferring a labelled
  * match on a later page over an unlabelled pattern on an earlier one.
@@ -1272,13 +1062,17 @@ export function locate(pages, find) {
   }
   return fallback;
 }
-/** Renders a PDF page to a PNG blob (shared by vision-model input and OCR fallback). */
+/** Renders a PDF page to a PNG blob for the local vision model. */
 async function renderPageToPngBlob(page, scale = RENDER_SCALE) {
   const viewport = page.getViewport({ scale });
   // Defensive cap: hostile PDFs can declare absurd page sizes. A 30 000 pt page
   // at 1:1 is ~900 megapixels and will OOM the tab. We scale down instead.
   const MAX_PX = 2000;
-  const fscale = Math.min(scale, MAX_PX / viewport.width, MAX_PX / viewport.height);
+  const fscale = Math.min(
+    scale,
+    MAX_PX / viewport.width,
+    MAX_PX / viewport.height,
+  );
   const capped = page.getViewport({ scale: fscale });
   const canvas = document.createElement("canvas");
   canvas.width = Math.ceil(capped.width);
@@ -1314,23 +1108,17 @@ async function extractTextLayer(page) {
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
-function overallMethod(pages) {
-  const methods = new Set(pages.filter((p) => p.text.trim()).map((p) => p.method));
-  methods.delete("none");
-  if (methods.size === 0) return "none";
-  if (methods.size > 1) return "mixed";
-  return methods.has("text-layer") ? "text-layer" : "ocr";
+export function overallMethod(pages) {
+  const hasTextLayer = pages.some((p) => p.method === "text-layer");
+  return hasTextLayer ? "text-layer" : "none";
 }
 const METHOD_LABEL = {
   "text-layer": "digital text",
-  ocr: "OCR",
-  mixed: "mixed text + OCR",
   none: "no readable text",
 };
 /**
- * Pure field extraction over per-page text. Confidence for each field blends
- * the source page's read quality with match strength
- * (labelled > pattern > heuristic); missing fields score low.
+ * Pure field extraction over per-page text. Values carry provenance instead of
+ * a synthetic confidence score; missing fields remain absent.
  */
 export function extractFieldsFromPages(
   pages: PageRead[],
@@ -1469,39 +1257,15 @@ export function extractFieldsFromPages(
       findAddressIn(t, businessProfile),
   );
   const ibanHit = locate(pageTexts, (t, w) => findIbanIn(t, businessProfile, knownVendorName, w));
+  const vatHit = locate(pageTexts, (t) => findVatNumberIn(t, businessProfile, vendorEmailValue));
   const businessRegHit = locate(pageTexts, (t) =>
     findBusinessRegistrationNumberIn(t, vendorEmailValue),
   );
-  const vatDocumentText = pages
-    .map((page) => `--- page ${page.pageNumber} ---\n${page.text}`)
-    .join("\n");
-  const vatCandidate = resolveSupplierVatNumber(
-    collectVatCandidates(vatDocumentText, {
-      profile: businessProfile,
-      vendorEmail: vendorEmailValue,
-      vendorIban: ibanHit?.value,
-      businessRegistrationNumber: businessRegHit?.value,
-    }),
-    {
-      text: vatDocumentText,
-      profile: businessProfile,
-      vendorEmail: vendorEmailValue,
-      vendorIban: ibanHit?.value,
-      businessRegistrationNumber: businessRegHit?.value,
-    },
-  );
-  const vatHit = vatCandidate
-    ? {
-        value: vatCandidate.value,
-        page: vatCandidate.page,
-        labelled: vatCandidate.labelled,
-      }
-    : undefined;
   const multiPage = pages.length > 1;
   const lineItems = pages
     .flatMap((p) => guessLineItemsIn(p.text, p.pageNumber))
     .slice(0, multiPage ? 20 : 8);
-  const fieldSources = {};
+  const fieldSources: Partial<Record<ExtractedField, number>> = {};
   if (vendorFinal) fieldSources.vendor = vendorFinal.page;
   if (numberHit) fieldSources.invoiceNumber = numberHit.page;
   if (issueHit) fieldSources.issueDate = issueHit.page;
@@ -1553,8 +1317,8 @@ export function extractFieldsFromPages(
  * back to the file name for `vendor`, so its output alone can't tell a real
  * read from a placeholder — `fieldSources` can.
  */
-export function confirmedReads(fields) {
-  const out = {};
+export function confirmedReads(fields: ExtractedFields) {
+  const out: Partial<Record<ExtractedField, string | number>> = {};
   for (const field of [
     ...ZONE_FIELDS,
     "address",
@@ -1577,132 +1341,139 @@ export function toPageText(page) {
     ...(page.words ? { words: page.words } : {}),
   };
 }
-/** Auto-approve accepts only complete reader outputs, never derived or manual values. */
-const AUTO_APPROVE_PROVENANCE = new Set(["exact", "read"]);
 /**
- /** Loads the file into per-page payloads. Each payload carries
+ * Derives a vendor name from the filename when no vendor was extracted.
+ * Strips the extension and replaces underscores/hyphens with spaces.
+ * "acme_invoice_2026.pdf" → "acme invoice 2026".
+ */
+export function vendorNameFromFile(fileName: string): string {
+  return fileName
+    .replace(/\.[a-z0-9]+$/i, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+}
+
+/** Loads the file into per-page payloads. Each payload carries
   * the extracted text, word boxes (from the text layer where available),
   * and a rendered page image for the VLM path.
   *
-  * Scanned images (photo/PDF-that-is-actually-an-image) skip Tesseract entirely:
-  * they are rendered to PNG and fed straight to the vision model. Gemma handles
-  * mild skew and noise natively — preprocessing was only there to help Tesseract,
-  * and we already pay the model load on this path.
+ * Scanned images (photo/PDF-that-is-actually-an-image) are rendered to PNG
+ * and fed straight to the vision model. The model handles mild skew and noise
+ * natively, so no image preprocessing is needed before the read.
   */
-async function loadPages(file, onProgress) {
-  const isImage = file.type.startsWith("image/");
-  const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
-  if (isImage) {
-    onProgress?.({
-      stage: "rendering page",
-      progress: 0.08,
-    });
-    // Images can't use pdfjs — render directly from the blob.
-    const bitmap = await createImageBitmap(file).catch(() => null);
-    if (!bitmap) {
-      return {
-        pages: [],
-        totalPages: 0,
-        truncated: false,
-      };
-    }
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.ceil(bitmap.width * RENDER_SCALE);
-    canvas.height = Math.ceil(bitmap.height * RENDER_SCALE);
-    const ctx = canvas.getContext("2d");
-    if (ctx) {
-      ctx.imageSmoothingEnabled = true;
-      ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-    }
-    bitmap.close();
-    const pngBlob = await new Promise<Blob | null>((resolve) =>
-      canvas.toBlob(resolve, "image/png"),
-    );
-    canvas.width = canvas.height = 0;
-    return {
-      pages: [
-        {
-          pageNumber: 1,
-          text: "",
-          method: "none",
-          image: pngBlob ?? file,
-          words: [],
-          sourceFile: file,
-        },
-      ],
-      totalPages: 1,
-      truncated: false,
-    };
-  }
-  if (!isPdf)
-    return {
-      pages: [],
-      totalPages: 0,
-      truncated: false,
-    };
-  const pdfjs = await pdfLib();
-  const data = await file.arrayBuffer();
-  const loadingTask = pdfjs.getDocument({ data, disableXfa: true });
-  const pdf = await loadingTask.promise;
-  const totalPages = pdf.numPages;
-  const count = Math.min(totalPages, MAX_PDF_PAGES);
-  const pages = [];
-  const processPage = async (n) => {
-    const base = 0.05 + (0.7 * (n - 1)) / count;
-    onProgress?.({
-      stage: `reading page ${n}`,
-      progress: base,
-      page: n,
-      totalPages,
-    });
-    const page = await pdf.getPage(n);
-    try {
-      const layered = await extractTextLayer(page);
-      let image;
-      let words = [];
-      let text = layered;
-      let method = layered.trim().length >= TEXT_LAYER_MIN_CHARS ? "text-layer" : "none";
-      if (method === "text-layer") {
-        words = await textLayerWordsFromPage(page);
-      } else {
-        // No embedded text or too little — render for the VLM.
-        onProgress?.({
-          stage: `rendering page ${n}`,
-          progress: base + 0.5 / count,
-          page: n,
-          totalPages,
-        });
-        image = await renderPageToPngBlob(page, RENDER_SCALE);
-      }
-      return {
-        pageNumber: n,
-        text,
-        method,
-        image: image ?? undefined,
-        words,
-        sourceFile: file,
-      };
-    } finally {
-      page.cleanup();
-    }
-  };
-  try {
-    // Sequential page processing — the VLM path is the bottleneck, not page I/O.
-    // Concurrency-2 only helps Tesseract, which we no longer run.
-    for (let n = 1; n <= count; n++) {
-      pages.push(await processPage(n));
-    }
-    pages.sort((a, b) => a.pageNumber - b.pageNumber);
-  } finally {
-    await loadingTask.destroy();
-  }
-  return {
-    pages,
-    totalPages,
-    truncated: totalPages > count,
-  };
-}
+ async function loadPages(file, onProgress) {
+   const isImage = file.type.startsWith("image/");
+   const isPdf = file.type === "application/pdf" || /\.pdf$/i.test(file.name);
+   if (isImage) {
+     onProgress?.({
+       stage: "rendering page",
+       progress: 0.08,
+     });
+     // Images can't use pdfjs — render directly from the blob.
+     const bitmap = await createImageBitmap(file).catch(() => null);
+     if (!bitmap) {
+       return {
+         pages: [],
+         totalPages: 0,
+         truncated: false,
+       };
+     }
+     const canvas = document.createElement("canvas");
+     canvas.width = Math.ceil(bitmap.width * RENDER_SCALE);
+     canvas.height = Math.ceil(bitmap.height * RENDER_SCALE);
+     const ctx = canvas.getContext("2d");
+     if (ctx) {
+       ctx.imageSmoothingEnabled = true;
+       ctx.imageSmoothingQuality = "high";
+       ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+     }
+     bitmap.close();
+     const pngBlob = await new Promise<Blob | null>((resolve) =>
+       canvas.toBlob(resolve, "image/png"),
+     );
+     canvas.width = canvas.height = 0;
+     return {
+       pages: [
+         {
+           pageNumber: 1,
+           text: "",
+           method: "none",
+           image: pngBlob ?? file,
+           words: [],
+           sourceFile: file,
+         },
+       ],
+       totalPages: 1,
+       truncated: false,
+     };
+   }
+   if (!isPdf)
+     return {
+       pages: [],
+       totalPages: 0,
+       truncated: false,
+     };
+   const pdfjs = await pdfLib();
+   const data = await file.arrayBuffer();
+   const loadingTask = pdfjs.getDocument({ data, disableXfa: true });
+   const pdf = await loadingTask.promise;
+   const totalPages = pdf.numPages;
+   const count = Math.min(totalPages, MAX_PDF_PAGES);
+   const pages = [];
+   const processPage = async (n) => {
+     const base = 0.05 + (0.7 * (n - 1)) / count;
+     onProgress?.({
+       stage: `reading page ${n}`,
+       progress: base,
+       page: n,
+       totalPages,
+     });
+     const page = await pdf.getPage(n);
+     try {
+       const layered = await extractTextLayer(page);
+       let image;
+       let words = [];
+       let text = layered;
+       let method = layered.trim().length >= TEXT_LAYER_MIN_CHARS ? "text-layer" : "none";
+       if (method === "text-layer") {
+         words = await textLayerWordsFromPage(page);
+       } else {
+         // No embedded text or too little — render for the VLM.
+         onProgress?.({
+           stage: `rendering page ${n}`,
+           progress: base + 0.5 / count,
+           page: n,
+           totalPages,
+         });
+         image = await renderPageToPngBlob(page, RENDER_SCALE);
+       }
+       return {
+         pageNumber: n,
+         text,
+         method,
+         image: image ?? undefined,
+         words,
+         sourceFile: file,
+       };
+     } finally {
+       page.cleanup();
+     }
+   };
+   try {
+     // Sequential page processing — the VLM path is the bottleneck, not page I/O.
+     for (let n = 1; n <= count; n++) {
+       pages.push(await processPage(n));
+     }
+     pages.sort((a, b) => a.pageNumber - b.pageNumber);
+   } finally {
+     await loadingTask.destroy();
+   }
+   return {
+     pages,
+     totalPages,
+     truncated: totalPages > count,
+   };
+ }
 /** Projects the PDF text layer's real transforms into normalized word boxes. */
 async function textLayerWordsFromPage(page) {
   const content = await page.getTextContent();
@@ -1737,23 +1508,62 @@ async function textLayerWordsFromPage(page) {
  * or nothing read — caller falls through to VLM. Every field the template
  * produces gets provenance "read" (template zone match).
  */
-export async function tryTemplatePath(pages, templates, lookup: TemplateLookup) {
+export async function tryTemplatePath(
+  pages: { pageNumber: number; text: string; words: OcrWord[] }[],
+  templates?: Record<string, VendorTemplate>,
+  lookup?: (input: { vendorBlock: string; embedding: number[] }) => VendorTemplate | undefined,
+) {
   if (!templates || Object.keys(templates).length === 0) return undefined;
   if (pages.length === 0) return undefined;
-  const firstPage = pages[0];
+  const firstPage = pages[0] as { words: OcrWord[] };
   if (firstPage.words.length === 0) return undefined;
   const vendorBlock = extractVendorBlock(firstPage.words);
   if (!vendorBlock) return undefined;
-  const tpl = lookup({
-    vendorBlock,
-    embedding: embedVendorText(vendorBlock),
-  });
+  if (lookup) {
+    const embedding = embedVendorText(vendorBlock);
+    const tpl = lookup({ vendorBlock, embedding });
+    if (!tpl) return undefined;
+    const fields: Partial<Record<ExtractedField, string | number>> = {};
+    const provenance: Partial<Record<ExtractedField, Provenance>> = {};
+    const fieldSources: Partial<Record<ExtractedField, number>> = {};
+    for (const page of pages)
+      for (const rawField of Object.keys(tpl.fields)) {
+        const field = rawField as ExtractedField;
+        if (fields[field] !== undefined) continue;
+        const spec = tpl.fields[field];
+        const hit = applyTemplateField((page as { words: OcrWord[] }).words, spec, field);
+        if (hit === undefined) continue;
+        fields[field] = hit.value;
+        provenance[field] = PROV_VLM;
+        fieldSources[field] = (page as { pageNumber: number }).pageNumber;
+      }
+    if (Object.keys(fields).length === 0) return undefined;
+    return { fields, provenance, fieldSources, fingerprint: tpl.vendor_fingerprint, templateKey: tpl.vendor_key };
+  }
+  const fingerprint = fingerprintOf(vendorBlock);
+  const embedding = embedVendorText(vendorBlock);
+  const candidates = Object.values(templates);
+  const ranked = candidates
+    .map((candidate) => ({
+      candidate,
+      score: cosine(embedding, candidate.embedding),
+    }))
+    .sort((a, b) => b.score - a.score);
+  const exact = candidates.find((candidate) => candidate.vendor_fingerprint === fingerprint);
+  const best = ranked[0];
+  const runnerUp = ranked[1];
+  const tpl =
+    exact ??
+    (best && best.score >= 0.82 && (!runnerUp || best.score - runnerUp.score >= 0.06)
+      ? best.candidate
+      : undefined);
   if (!tpl) return undefined;
-  const fields = {};
-  const provenance = {};
-  const fieldSources = {};
+  const fields: Partial<Record<ExtractedField, string | number>> = {};
+  const provenance: Partial<Record<ExtractedField, Provenance>> = {};
+  const fieldSources: Partial<Record<ExtractedField, number>> = {};
   for (const page of pages)
-    for (const field of Object.keys(tpl.fields)) {
+    for (const rawField of Object.keys(tpl.fields)) {
+      const field = rawField as ExtractedField;
       if (fields[field] !== undefined) continue;
       const spec = tpl.fields[field];
       const hit = applyTemplateField(page.words, spec, field);
@@ -1790,12 +1600,11 @@ export function applyDriftReads(args) {
   const provenance = { ...args.provenance };
   const fieldSources = { ...args.fieldSources };
   const recoveredBy = {};
-  const defaultProvenance = args.source === "ocr-fallback" ? PROV_OCR : PROV_VLM;
   for (const field of args.missing) {
     const read = args.reads[field];
     if (!read) continue;
     fields[field] = read.value;
-    provenance[field] = read.provenance ?? defaultProvenance;
+    provenance[field] = PROV_VLM;
     fieldSources[field] = read.page;
     recoveredBy[field] = args.source;
   }
@@ -1812,13 +1621,16 @@ export function applyDriftReads(args) {
  * Only fields the regex reader genuinely found are returned, so a file-name
  * vendor fallback never masquerades as a recovered value.
  */
+/** What the drift-recovery scan got back for one field. */
+export type RecoveredRead = { value: string | number; provenance: Provenance; page: number };
+export type RecoveredReads = Partial<Record<ExtractedField, RecoveredRead>>;
 export function recoverFieldsFromText(
   pages,
   fileName,
-  missing,
-  businessProfile = EMPTY_BUSINESS_PROFILE,
-) {
-  const out = {};
+  missing: ExtractedField[],
+  businessProfile?,
+): RecoveredReads {
+  const out: RecoveredReads = {};
   if (missing.length === 0) return out;
   const reads = extractFieldsFromPages(pages, fileName, businessProfile);
   for (const field of missing) {
@@ -1841,8 +1653,8 @@ export function applyLineItemsSpec(pages, spec) {
   return parseLineItemRows(words, spec).map((li) => ({
     ...li,
     id: uid(),
-    glAccount: GL_ACCOUNTS[0],
-    department: DEPARTMENTS[0],
+    glAccount: GL_ACCOUNTS[0]!,
+    department: DEPARTMENTS[0]!,
   }));
 }
 /** Runs the VLM fallback and parses the constrained JSON. */
@@ -1866,10 +1678,7 @@ async function ensureVisionImages(pages) {
   if (missing.length === 0) return;
   const source = missing[0].sourceFile;
   if (!/\.pdf$/i.test(source.name) && source.type !== "application/pdf") return;
-  const loadingTask = (await pdfLib()).getDocument({
-    data: await source.arrayBuffer(),
-    disableXfa: true,
-  });
+  const loadingTask = (await pdfLib()).getDocument({ data: await source.arrayBuffer(), disableXfa: true });
   const pdf = await loadingTask.promise;
   try {
     await Promise.all(
@@ -1888,14 +1697,21 @@ async function ensureVisionImages(pages) {
 }
 /** Check whether all critical fields have been filled by the VLM so far. */
 function allCriticalFieldsFound(results) {
-  const merged = mergeGemmaPages(results);
+  const merged = mergeVisionPages(results);
   return CRITICAL_HEURISTIC_FIELDS.every((f) => {
     const v = merged[f];
     return typeof v === "object" && v !== null && "value" in v ? !!v.value : false;
   });
 }
-async function tryVlmPath(pages, onProgress, onToken) {
-  if (!(await gemmaHealthy()) || pages.length === 0) return undefined;
+/**
+ * The VLM read, reached only through the registered `VisionEngine`. Exported
+ * so the port can be exercised with a fake engine and no model server — if
+ * this ever stops consulting `visionEngine()`, vision quietly dies app-wide
+ * and only a test like that will say so.
+ */
+export async function tryVlmPath(pages, onProgress, onToken) {
+  const engine = visionEngine();
+  if (!engine || !(await engine.healthy()) || pages.length === 0) return undefined;
   onProgress?.({
     stage: "AI reading document",
     progress: 0.85,
@@ -1911,27 +1727,44 @@ async function tryVlmPath(pages, onProgress, onToken) {
       results.push(null);
       continue;
     }
-    const b64 = page.visionB64 ?? (await blobToBase64(await downscaleToJpeg(image)));
+    const b64 = page.visionB64 ?? (await engine.encodePageImage(image));
     page.visionB64 ??= b64;
     try {
-      const { page: parsed, model } = await extractPageWithVision(
-        b64,
-        page.pageNumber,
-        pages.length,
-        imageExtractModelOrder(),
+      const { page: parsed, model } = await engine.extractPage({
+        imageB64: b64,
+        page: page.pageNumber,
+        totalPages: pages.length,
         onProgress,
         onToken,
-      );
+      });
       results.push(parsed);
       winningModel ??= model;
     } catch {
       results.push(null);
     }
   }
-  const merged = mergeGemmaPages(results, pages.map((p) => p.text).join("\n"));
-  const fields = gemmaToFields(merged);
+  const merged = mergeVisionPages(results, pages.map((p) => p.text).join("\n"));
+  const fields = visionPageToFields(merged);
   const prepaid = detectPrepaid(merged.pagesText);
-  const picked = {};
+  // Drop the VLM result when the model found nothing beyond empty strings
+  // and the heuristic path already has data — don't let a silent VLM
+  // override real text-layer reads.
+  if (
+    fields.vendor === undefined &&
+    fields.address === undefined &&
+    fields.vendorEmail === undefined &&
+    fields.iban === undefined &&
+    fields.vatNumber === undefined &&
+    fields.businessRegistrationNumber === undefined &&
+    fields.invoiceNumber === undefined &&
+    fields.issueDate === undefined &&
+    fields.dueDate === undefined &&
+    fields.subtotal === undefined &&
+    fields.tax === undefined &&
+    fields.total === undefined
+  )
+    return undefined;
+  const picked: Partial<Record<ExtractedField, string | number>> = {};
   for (const f of [
     "vendor",
     "address",
@@ -1949,12 +1782,9 @@ async function tryVlmPath(pages, onProgress, onToken) {
     const v = fields[f];
     if (v !== undefined && v !== "") picked[f] = v;
   }
-  if (Object.keys(picked).length === 0) return undefined;
   return {
     fields: picked,
-    provenance: Object.fromEntries(
-      Object.keys(picked).map((field) => [field, fields.provenance[field]]),
-    ),
+    provenance: fields.provenance,
     fieldSources: fields.fieldSources,
     currency: fields.currency,
     lineItems: fields.lineItems,
@@ -1976,7 +1806,7 @@ async function tryHeuristicPath(pages, fileName, businessProfile) {
     fileName,
     businessProfile,
   );
-  const out = {};
+  const out: Partial<Record<ExtractedField, string | number>> = {};
   if (fields.vendor !== undefined) out.vendor = fields.vendor;
   if (fields.invoiceNumber !== undefined) out.invoiceNumber = fields.invoiceNumber;
   if (fields.issueDate !== undefined) out.issueDate = fields.issueDate;
@@ -1988,7 +1818,7 @@ async function tryHeuristicPath(pages, fileName, businessProfile) {
   if (fields.vendorEmail !== undefined) out.vendorEmail = fields.vendorEmail;
   if (fields.iban !== undefined) out.iban = fields.iban;
   if (fields.vatNumber !== undefined) out.vatNumber = fields.vatNumber;
-  if (fields.businessRegistrationNumber !== undefined && fields.businessRegistrationNumber !== "") {
+  if (fields.businessRegistrationNumber !== undefined) {
     out.businessRegistrationNumber = fields.businessRegistrationNumber;
   }
   const prepaid = detectPrepaid(pages.map((p) => p.text).join("\n"));
@@ -2002,17 +1832,11 @@ async function tryHeuristicPath(pages, fileName, businessProfile) {
     prepaidPhrase: prepaid.phrase,
   };
 }
-/** Fast phase: preprocess → layout OCR → fingerprint → template match.
+/** Fast phase: read document text → fingerprint → template match.
  *  Returns either a finished Invoice (template hit) or a ProcessingSkeleton
  *  (novel vendor). The caller decides whether to await the VLM/heuristic
  *  fallback here or hand off to a background job. */
-export async function extractQuickPhase(
-  file,
-  onProgress,
-  templates,
-  businessProfile = EMPTY_BUSINESS_PROFILE,
-  templateLookup: TemplateLookup,
-) {
+export async function extractQuickPhase(file, onProgress, templates) {
   // Hash the original bytes uniformly at the top, before any type branching.
   const fileHash = await computeFileHash(file);
   const isImage = file.type.startsWith("image/");
@@ -2037,11 +1861,11 @@ export async function extractQuickPhase(
         total: 0,
         status: "draft",
         lineItems: [],
-        glAccount: GL_ACCOUNTS[0],
-        department: DEPARTMENTS[0],
+        glAccount: GL_ACCOUNTS[0]!,
+        department: DEPARTMENTS[0]!,
         memo: "",
         tags: [],
-        provenance: {},
+        confidence: {},
         audit: [
           {
             id: uid(),
@@ -2052,7 +1876,7 @@ export async function extractQuickPhase(
           },
         ],
         source: "upload",
-        engine: "ocr",
+        engine: undefined,
         fileName: file.name,
         fileType: file.type,
         fileUrl: URL.createObjectURL(file),
@@ -2062,7 +1886,7 @@ export async function extractQuickPhase(
     };
   }
   onProgress?.({
-    stage: "preprocessing",
+    stage: "reading document",
     progress: 0.05,
   });
   const loaded = await loadPages(file, onProgress);
@@ -2070,7 +1894,7 @@ export async function extractQuickPhase(
     stage: "matching vendor",
     progress: 0.8,
   });
-  const templateHit = await tryTemplatePath(loaded.pages, templates, templateLookup);
+  const templateHit = await tryTemplatePath(loaded.pages, templates);
   if (templateHit) {
     onProgress?.({
       stage: "template hit",
@@ -2087,8 +1911,8 @@ export async function extractQuickPhase(
         provenance: templateHit.provenance,
         fieldSources: templateHit.fieldSources,
         missing: driftFields,
-        reads: recoverFieldsFromText(loaded.pages, file.name, driftFields, businessProfile),
-        source: "ocr-fallback",
+        reads: recoverFieldsFromText(loaded.pages, file.name, driftFields),
+        source: "text",
       });
       if (merged.stillMissing.length > 0)
         return {
@@ -2135,7 +1959,6 @@ export async function extractQuickPhase(
               ...(hold ? { templateHold: true } : {}),
             },
             templates,
-            fileHash,
           })),
           templateDrift: {
             missing: driftFields,
@@ -2165,7 +1988,6 @@ export async function extractQuickPhase(
             ...(hold ? { templateHold: true } : {}),
           },
           templates,
-          fileHash,
         })),
         fileHash,
       },
@@ -2187,7 +2009,7 @@ export async function extractQuickPhase(
  * drift recovery job surface the fields a template already read while it waits
  * on the model.
  */
-export async function buildProcessingSkeleton(file, loaded, partial): Promise<Invoice> {
+export async function buildProcessingSkeleton(file, loaded, partial) {
   const now = new Date().toISOString();
   const method = overallMethod(loaded.pages);
   const pageCount = loaded.totalPages;
@@ -2217,11 +2039,11 @@ export async function buildProcessingSkeleton(file, loaded, partial): Promise<In
       : undefined,
     status: "processing",
     lineItems: [],
-    glAccount: GL_ACCOUNTS[0],
-    department: DEPARTMENTS[0],
+    glAccount: GL_ACCOUNTS[0]!,
+    department: DEPARTMENTS[0]!,
     memo: "",
     tags: [],
-    provenance: partial?.provenance ?? {},
+    confidence: partial?.confidence ?? {},
     audit: [
       {
         id: uid(),
@@ -2249,6 +2071,7 @@ export async function buildProcessingSkeleton(file, loaded, partial): Promise<In
     ocrPages: loaded.pages.map((p) => ({
       pageNumber: p.pageNumber,
       charCount: p.text.trim().length,
+      confidence: p.image ? 0.9 : 0.98,
       method: p.method,
     })),
     fieldSources: partial?.fieldSources ?? {},
@@ -2258,13 +2081,7 @@ export async function buildProcessingSkeleton(file, loaded, partial): Promise<In
 }
 /** Background phase: runs VLM/heuristic on the cached pages. Returns the
  *  finalised Invoice, suitable to swap in for the skeleton. */
-export async function runBackgroundJob(
-  skeleton,
-  onProgress,
-  onToken,
-  templates,
-  businessProfile,
-): Promise<Invoice> {
+export async function runBackgroundJob(skeleton, onProgress, onToken, templates, businessProfile) {
   const { invoice, loadedPages } = skeleton;
   const pages = loadedPages;
   if (skeleton.drift) return runDriftRecovery(skeleton, pages, onProgress, onToken, templates);
@@ -2284,7 +2101,7 @@ export async function runBackgroundJob(
     )
   )
     chosen = {
-      path: "ocr",
+      path: "text",
       fields: heur.fields,
       provenance: heur.provenance,
       fieldSources: heur.fieldSources,
@@ -2303,30 +2120,22 @@ export async function runBackgroundJob(
     },
     chosen,
     templates,
-    fileHash: invoice.fileHash,
   });
 }
-/** Merges heuristic (text-layer regex) and VLM results using fixed priority:
- *   UBL / text-layer regex  >  template zone  >  VLM  >  derived
- *
- * When two readers disagree on a field, reconciliation picks the value
- * consistent with subtotal + tax / line sums — see reconcileExtraction.
- */
+/** Text-layer values win; the VLM only fills fields the text reader missed. */
 export function mergeVlmResult(heur, vlmHit) {
-  // Fixed priority: text-layer regex wins; VLM only fills gaps.
-  // Provenance is inherited from the heuristic reader; VLM gaps keep the
-  // provenance returned by the model, including derived payment-term dates.
   const fields = { ...heur.fields };
   const provenance = { ...heur.provenance };
   const fieldSources = { ...heur.fieldSources };
 
+  // The text-layer reader is authoritative; the model only fills gaps.
   if (vlmHit) {
     for (const [field, value] of Object.entries(vlmHit.fields)) {
       if (fields[field] === undefined || fields[field] === "" || fields[field] === 0) {
         fields[field] = value;
-        provenance[field] = vlmHit.provenance?.[field] ?? PROV_VLM;
-        if (vlmHit.fieldSources[field] !== undefined)
-          fieldSources[field] = vlmHit.fieldSources[field];
+        provenance[field] = PROV_VLM;
+        const source = vlmHit.fieldSources[field];
+        if (source !== undefined) fieldSources[field] = source;
       }
     }
   }
@@ -2336,7 +2145,7 @@ export function mergeVlmResult(heur, vlmHit) {
     fields,
     provenance,
     fieldSources,
-    lineItems: vlmHit && vlmHit.lineItems.length > 0 ? vlmHit.lineItems : heur.lineItems,
+    lineItems: vlmHit?.lineItems.length ? vlmHit.lineItems : heur.lineItems,
     currency: vlmHit?.currency ?? heur.currency,
     templateFingerprint: undefined,
     model: vlmHit?.model,
@@ -2350,13 +2159,7 @@ export function mergeVlmResult(heur, vlmHit) {
  * template path so the values that did read are preserved and `recoveredBy`
  * records which reader supplied each field.
  */
-export async function runDriftRecovery(
-  skeleton,
-  pages,
-  onProgress,
-  onToken,
-  templates,
-): Promise<Invoice> {
+export async function runDriftRecovery(skeleton, pages, onProgress, onToken, templates) {
   const drift = skeleton.drift;
   const unresolved = drift.missing.filter((field) => drift.recoveredBy[field] === undefined);
   onProgress?.({
@@ -2372,7 +2175,7 @@ export async function runDriftRecovery(
         if (value === undefined || value === "") continue;
         reads[field] = {
           value,
-          provenance: vlm.provenance[field] ?? PROV_VLM,
+          provenance: PROV_VLM,
           page: vlm.fieldSources[field] ?? 1,
         };
       }
@@ -2409,7 +2212,6 @@ export async function runDriftRecovery(
         ...(drift.templateHold ? { templateHold: true } : {}),
       },
       templates,
-      fileHash: skeleton.invoice.fileHash,
     })),
     templateDrift: {
       missing: drift.missing,
@@ -2448,7 +2250,7 @@ export function reconcileExtraction({ subtotal, tax, total, lineItems }) {
 }
 /** Builds the final Invoice payload from the chosen path + cached pages. */
 export async function finalizeInvoice(args): Promise<Invoice> {
-  const { file, loaded, chosen, templates, fileHash = "" } = args;
+  const { file, loaded, chosen, templates } = args;
   const isImage = file.type.startsWith("image/");
   const now = new Date().toISOString();
   const method = overallMethod(loaded.pages);
@@ -2476,18 +2278,10 @@ export async function finalizeInvoice(args): Promise<Invoice> {
   const documentText = loaded.pages.map((page) => page.text).join("\n");
   const finalDueDate =
     dueDate || dueDateFromPaymentTerms(documentText, issueDate || undefined) || "";
-  const chosenVatNumber = chosen.fields.vatNumber ? String(chosen.fields.vatNumber) : undefined;
-  const chosenBusinessRegistrationNumber = chosen.fields.businessRegistrationNumber
-    ? String(chosen.fields.businessRegistrationNumber)
-    : undefined;
-  const textVatNumber = resolveSupplierVatNumber(collectVatCandidates(documentText), {
-    text: documentText,
-    vendorEmail,
-    vendorIban: iban,
-    businessRegistrationNumber: chosenBusinessRegistrationNumber,
-  })?.value;
-  const vatNumber =
-    preferAnchoredProfileValue(chosenVatNumber, textVatNumber, vendorEmail) ?? textVatNumber;
+  const chosenVat = chosen.fields.vatNumber ? String(chosen.fields.vatNumber) : undefined;
+  const textVat = findVatNumberIn(documentText, undefined, vendorEmail)?.value;
+  const anchoredVat = preferAnchoredProfileValue(chosenVat, textVat, vendorEmail);
+  const vatNumber = anchoredVat ?? chosenVat ?? textVat;
   const businessRegistrationNumber = preferAnchoredProfileValue(
     chosen.fields.businessRegistrationNumber
       ? String(chosen.fields.businessRegistrationNumber)
@@ -2518,7 +2312,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
   // Cross-check: text-layer regex vs primary reader. Still useful as a
   // verification signal — disagreements surface in the audit trail.
   let crossCheck;
-  if (chosen.path !== "ocr") {
+  if (chosen.path !== "text") {
     const secondary = confirmedReads(
       extractFieldsFromPages(
         loaded.pages.map((p) => ({
@@ -2533,56 +2327,20 @@ export async function finalizeInvoice(args): Promise<Invoice> {
   }
   const crossCheckDisagreements = disagreements(crossCheck);
 
+  const visionLabel = chosen.model ?? visionEngine()?.modelName() ?? "vision model";
   const auditAction =
     chosen.path === "template"
       ? `Template extraction (${chosen.templateFingerprint})`
       : chosen.path === "vlm"
-        ? `AI vision extraction (${chosen.model ?? gemmaModel()}) — new vendor`
-        : isImage
-          ? "Document scanned and sent to AI vision"
-          : `PDF parsed — ${pageCount} page${pageCount === 1 ? "" : "s"} (${METHOD_LABEL[method]})${loaded.truncated ? `, first 20 processed` : ""}`;
+        ? `AI vision extraction (${visionLabel}) — new vendor`
+        : `Document text read — ${pageCount} page${pageCount === 1 ? "" : "s"} (${METHOD_LABEL[method]})${loaded.truncated ? `, first 20 processed` : ""}`;
   const auditNote =
     file.name +
     (chosen.path === "template"
       ? " · template match"
       : chosen.path === "vlm"
         ? " · VLM read"
-        : " · scanned to VLM");
-
-  let zoneCheck;
-  const sanityTemplate = templates?.[vendor];
-  if (sanityTemplate?.fields && Object.keys(sanityTemplate.fields).length > 0)
-    try {
-      const legacyZones = {};
-      let hasZone = false;
-      for (const [field, spec] of Object.entries(sanityTemplate.fields)) {
-        if (!spec) continue;
-        const z = spec._zone;
-        if (z) {
-          legacyZones[field] = z;
-          hasZone = true;
-          continue;
-        }
-        const pageWords = loaded.pages[0]?.words ?? [];
-        if (pageWords.length === 0) continue;
-        const re = specToZone(spec, pageWords);
-        if (re.w > 0 && re.h > 0) {
-          legacyZones[field] = re;
-          hasZone = true;
-        }
-      }
-      const source = isImage ? await downscaleToJpeg(file) : loaded.pages[0]?.image;
-      if (source && hasZone) {
-        // Zone check no longer uses Tesseract — the VLM is the verification path.
-        // We keep the zone geometry for the draft screen's visual anchor indicators.
-        zoneCheck = Object.entries(legacyZones).map(([field, zone]) => ({
-          field: field as ZoneField,
-          ai: String(chosen.fields[field] ?? ""),
-          ocr: "",
-          match: true,
-        }));
-      }
-    } catch {}
+        : " · read from document text");
 
   // Auto-approve check: every field is exact or read, nothing derived/manual,
   // and reconciliation passes.
@@ -2590,9 +2348,9 @@ export async function finalizeInvoice(args): Promise<Invoice> {
     Object.values(finalProvenance).every((p) => AUTO_APPROVE_PROVENANCE.has(p)) &&
     !reconciliation.mismatch;
 
-  const fieldPath = {};
+  const fieldPath: Partial<Record<ExtractedField, "template" | "vlm" | "text">> = {};
   for (const f of Object.keys(chosen.fields))
-    fieldPath[f] = chosen.path === "template" ? "template" : chosen.path === "vlm" ? "vlm" : "ocr";
+    fieldPath[f as ExtractedField] = chosen.path as "template" | "vlm" | "text";
 
   return {
     id: uid(),
@@ -2613,8 +2371,8 @@ export async function finalizeInvoice(args): Promise<Invoice> {
     ...(chosen.templateHold ? { templateHold: true } : {}),
     ...(autoApprove ? { autoApproved: true } : {}),
     lineItems: chosen.lineItems,
-    glAccount: GL_ACCOUNTS[0],
-    department: DEPARTMENTS[0],
+    glAccount: GL_ACCOUNTS[0]!,
+    department: DEPARTMENTS[0]!,
     memo: "",
     tags: [],
     provenance: finalProvenance,
@@ -2636,7 +2394,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
       {
         id: uid(),
         at: now,
-        actor: "OCR engine",
+        actor: chosen.path === "template" ? "template" : chosen.path === "vlm" ? "vision model" : "document text",
         action: auditAction,
         note: auditNote,
       },
@@ -2645,7 +2403,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
             {
               id: uid(),
               at: now,
-              actor: "OCR engine",
+              actor: "system",
               action: "Extraction needs review",
               note: reconciliation.reason,
             },
@@ -2656,7 +2414,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
             {
               id: uid(),
               at: now,
-              actor: "OCR engine",
+              actor: "system",
               action: "Cross-check flagged disagreements",
               note: `${crossCheckDisagreements.length} field${crossCheckDisagreements.length === 1 ? "" : "s"} read differently by the vision and text readers — confirm before approving.`,
             },
@@ -2667,7 +2425,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
             {
               id: uid(),
               at: now,
-              actor: "OCR engine",
+              actor: "document text",
               action: "Prepaid phrasing detected",
               note: `The document text describes this amount as already paid: "${invoicePrepaid.phrase}". This is an attention flag, not a blocker — the paying screen decides auto-mark vs manual review, but the flag stays on the invoice so it cannot be missed on a high-value payment run.`,
             },
@@ -2675,7 +2433,7 @@ export async function finalizeInvoice(args): Promise<Invoice> {
         : []),
     ],
     source: "upload",
-    engine: chosen.path === "template" ? "template" : chosen.path === "vlm" ? "gemma" : "ocr",
+    engine: chosen.path === "template" ? "template" : chosen.path === "vlm" ? "gemma" : "text",
     templateFingerprint: chosen.templateFingerprint,
     fieldPath,
     prepaid: !!invoicePrepaid,
@@ -2706,29 +2464,26 @@ export async function finalizeInvoice(args): Promise<Invoice> {
     ocrPages: loaded.pages.map((p) => ({
       pageNumber: p.pageNumber,
       charCount: p.text.trim().length,
+      confidence: Number((p.image ? 0.92 : 0.98).toFixed(2)),
       method: p.method,
     })),
     fieldSources: chosen.fieldSources,
-    ...(zoneCheck ? { zoneCheck } : {}),
     ...(crossCheck ? { crossCheck } : {}),
     createdAt: now,
-    fileHash,
   };
 }
 /** Builds a VendorTemplate from a confirmed invoice — used by the auto-learn
  * hook (see store.tsx). Operates on the cached `learnPayload` so we don't
  * re-run OCR. Only fields with provenance "exact" or "read" are learned —
  * derived/manual fields are not reliable enough to teach the template. */
-export function buildTemplateFromInvoice(invoice) {
+export function buildTemplateFromInvoice(invoice: Invoice): VendorTemplate | undefined {
   const payload = invoice.learnPayload;
-  if (!payload || payload.pages.length === 0) return undefined;
-  const words = payload.pages[0].words.map((w) => ({ ...w }));
-  if (words.length === 0) return undefined;
-  const vendorBlock = extractVendorBlock(words);
-  if (!vendorBlock) return undefined;
-  const fields = {};
+  const words = payload?.pages[0]?.words.map((w) => ({ ...w })) ?? [];
+  const vendorBlock = (words.length > 0 ? extractVendorBlock(words) : undefined) ?? invoice.vendor;
   const provenance = invoice.provenance ?? {};
-  for (const field of Object.keys(provenance)) {
+  const fields: Partial<Record<ExtractedField, AnchorSpec>> = {};
+  for (const rawField of Object.keys(provenance)) {
+    const field = rawField as ExtractedField;
     // Only learn from exact (text layer) or read (template/VLM) — not derived or manual.
     if (provenance[field] !== "exact" && provenance[field] !== "read") continue;
     const value = invoice[field];
@@ -2736,7 +2491,6 @@ export function buildTemplateFromInvoice(invoice) {
     const spec = deriveAnchor(words, field, value);
     if (spec) fields[field] = spec;
   }
-  if (Object.keys(fields).length === 0) return undefined;
   return {
     vendor_fingerprint: fingerprintOf(vendorBlock),
     vendor_key: invoice.vendor,
@@ -2748,7 +2502,11 @@ export function buildTemplateFromInvoice(invoice) {
 }
 /** Reverse-engineers an AnchorSpec by finding the value's words and the
  * nearest anchor label preceding them. */
-function deriveAnchor(words, field, value) {
+function deriveAnchor(
+  words: OcrWord[],
+  field: ExtractedField,
+  value: string | number,
+): AnchorSpec | undefined {
   const anchorCandidates = ANCHOR_LABELS[field] ?? [];
   let anchor;
   for (const cand of anchorCandidates) {
@@ -2826,7 +2584,8 @@ function nearestValueWord(words, anchor, value) {
   if (!needle) return undefined;
   let best;
   for (const w of words) {
-    if (w.y < anchor.y + anchor.h) continue;
+    if (w.y < anchor.y - 0.05 || w.y > anchor.y + 0.15) continue;
+    if (w.x + w.w < anchor.x + anchor.w) continue;
     const hay = w.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
     if (!hay) continue;
     let score = 0;

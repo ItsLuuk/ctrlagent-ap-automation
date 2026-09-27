@@ -53,3 +53,10 @@ donut-service/venv/
 # Isolated worktrees
 .worktrees/
 .superpowers/
+
+# Desktop build artifacts (Tauri / Electron builds)
+.desktop-builds/
+src-tauri/target/
+
+# Tauri dev payload
+.tauri-payload/

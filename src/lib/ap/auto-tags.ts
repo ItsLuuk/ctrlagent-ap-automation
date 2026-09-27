@@ -6,7 +6,8 @@
  * at creation time and re-evaluated when the invoice list changes (e.g. a
  * "First-time vendor" becomes "Recurring" when a second invoice arrives).
  */
-import type { Invoice, InvoiceTag } from "./types";
+import type { Invoice, InvoiceTag, VendorProfile } from "./types";
+import { duplicatePeer } from "./duplicate-detection";
 
 /** Threshold for "High value" invoices (EUR). */
 const HIGH_VALUE_THRESHOLD = 10_000;
@@ -23,6 +24,11 @@ const DUPLICATE_AMOUNT_TOLERANCE = 0.01;
 /**
  * Computes the system-derived tags for an invoice based on its data and
  * the full invoice list. Returns a sorted, deduplicated array of tags.
+ *
+ * `profiles` is an argument rather than a lookup this module performs: vendor
+ * profiles live behind persistence, and tags are a domain rule. The caller
+ * (the store) reads them and hands them in, so this module stays dependency-
+ * free and testable without a storage layer.
  *
  * Call this:
  *  - When an invoice is created (to set initial tags)
@@ -48,36 +54,6 @@ export function isLate(
 }
 
 /**
- * The invoice this one looks like a duplicate of, if any. Same vendor, same
- * currency, total within 1%, issued within a week of each other.
- *
- * One definition, three users: the "Duplicate risk" tag a row wears, the wording
- * of the removal action, and the note that goes in the audit trail when someone
- * acts on it. They cannot disagree about which pair is the pair.
- *
- * The currency check is part of identity, not a nicety: without it a €100
- * invoice flags against a $100 one and the flag is noise.
- */
-export function duplicatePeer(invoice: Invoice, allInvoices: Invoice[]): Invoice | undefined {
-  if (invoice.total <= 0) return undefined;
-  return allInvoices.find((candidate) => {
-    if (candidate.id === invoice.id) return false;
-    if (candidate.total <= 0) return false;
-    if (candidate.currency !== invoice.currency) return false;
-    if (candidate.vendor.toLowerCase() !== invoice.vendor.toLowerCase()) return false;
-    const amountMatch =
-      Math.abs(candidate.total - invoice.total) / Math.max(candidate.total, invoice.total) <=
-      DUPLICATE_AMOUNT_TOLERANCE;
-    if (!amountMatch) return false;
-    const daysDiff = Math.abs(
-      (new Date(candidate.issueDate).getTime() - new Date(invoice.issueDate).getTime()) /
-        (1000 * 60 * 60 * 24),
-    );
-    return daysDiff <= DUPLICATE_WINDOW_DAYS;
-  });
-}
-
-/**
  * Tags as they stand right now, for a whole list at once.
  *
  * Tags are derived data, so a record can carry a claim that is no longer true:
@@ -86,11 +62,24 @@ export function duplicatePeer(invoice: Invoice, allInvoices: Invoice[]): Invoice
  * overdue total agree" honest for records that were already on disk — a rejected
  * record sitting there wearing Late is exactly the disagreement.
  */
-export function retagAll(invoices: Invoice[]): Invoice[] {
-  return invoices.map((invoice) => ({ ...invoice, tags: computeAutoTags(invoice, invoices) }));
+export function retagAll(
+  invoices: Invoice[],
+  profiles: Record<string, VendorProfile>,
+  knownInvoices: Invoice[] = invoices,
+): Invoice[] {
+  return invoices.map((invoice) => {
+    const tags = computeAutoTags(invoice, knownInvoices, profiles);
+    return tags.length === invoice.tags.length && tags.every((tag, index) => tag === invoice.tags[index])
+      ? invoice
+      : { ...invoice, tags };
+  });
 }
 
-export function computeAutoTags(invoice: Invoice, allInvoices: Invoice[]): InvoiceTag[] {
+export function computeAutoTags(
+  invoice: Invoice,
+  allInvoices: Invoice[],
+  profiles: Record<string, VendorProfile>,
+): InvoiceTag[] {
   const tags = new Set<InvoiceTag>();
   const now = new Date();
 
@@ -105,8 +94,13 @@ export function computeAutoTags(invoice: Invoice, allInvoices: Invoice[]): Invoi
   }
 
   // ── Duplicate risk ─────────────────────────────────────────────────
-  if (duplicatePeer(invoice, allInvoices)) {
-    tags.add("Duplicate risk");
+  const peer = duplicatePeer(invoice, allInvoices, profiles);
+  if (peer) {
+    const a = invoice.total;
+    const b = peer.total;
+    const amountClose =
+      a <= 0 || b <= 0 ? true : Math.abs(a - b) / Math.max(a, b) <= DUPLICATE_AMOUNT_TOLERANCE;
+    if (amountClose) tags.add("Duplicate risk");
   }
 
   // ── High value ─────────────────────────────────────────────────────

@@ -12,44 +12,54 @@
 import type { AnchorSpec, OcrWord, ZoneField } from "./types";
 import { moneyToNumber, parseDateParts } from "./zones";
 
-/** Cheap string-distance match for finding an anchor word in the OCR stream. */
-function nearestWord(words: OcrWord[], query: string): OcrWord | undefined {
-  const needle = query.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-  if (!needle) return undefined;
-  let best: { word: OcrWord; score: number } | undefined;
+function nearestWord(words: OcrWord[], anchorText: string): OcrWord | undefined {
+  if (!anchorText || anchorText.trim().length === 0) return undefined;
+  const needle = anchorText.trim().toLowerCase();
+
+  // 1. Exact match.
   for (const w of words) {
-    const hay = w.text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
-    if (!hay) continue;
-    const score = sharedCharScore(needle, hay);
-    if (best === undefined || score > best.score) best = { word: w, score };
+    if (w.text.trim().toLowerCase() === needle) return w;
   }
-  // Threshold — reject anything below 0.45 similarity.
-  return best && best.score >= 0.45 ? best.word : undefined;
+  // 2. Substring match.
+  for (const w of words) {
+    const wt = w.text.trim().toLowerCase();
+    if (wt.includes(needle) || needle.includes(wt)) return w;
+  }
+  // 3. Levenshtein fuzzy match.
+  let best: { word: OcrWord; dist: number } | undefined;
+  for (const w of words) {
+    const wt = w.text.trim().toLowerCase();
+    if (wt.length === 0) continue;
+    const d = levenshtein(needle, wt);
+    if (d <= 2 && (!best || d < best.dist)) best = { word: w, dist: d };
+  }
+  return best?.word;
 }
 
-/** Bigram-style overlap; fast and tolerant of OCR typos. */
-function sharedCharScore(a: string, b: string): number {
-  const longer = a.length >= b.length ? a : b;
-  const shorter = a.length >= b.length ? b : a;
-  if (!longer.length) return 0;
-  // Substring containment is worth a lot for short anchors like "datum".
-  if (longer.includes(shorter)) return shorter.length / longer.length;
-  let matches = 0;
-  const used = new Set<number>();
-  for (let i = 0; i < shorter.length; i++) {
-    for (let j = 0; j < longer.length; j++) {
-      if (used.has(j)) continue;
-      if (shorter[i] === longer[j]) {
-        matches++;
-        used.add(j);
-        break;
-      }
+function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () =>
+    Array.from({ length: n + 1 }, () => 0),
+  );
+  // Every index below is inside the grid just allocated — the `!`s are that
+  // claim, not a hope.
+  for (let i = 0; i <= m; i++) dp[i]![0] = i;
+  for (let j = 0; j <= n; j++) dp[0]![j] = j;
+  for (let i = 1; i <= m; i++) {
+    const row = dp[i]!;
+    const prev = dp[i - 1]!;
+    for (let j = 1; j <= n; j++) {
+      row[j] =
+        a[i - 1] === b[j - 1]
+          ? prev[j - 1]!
+          : 1 + Math.min(prev[j]!, row[j - 1]!, prev[j - 1]!);
     }
   }
-  return matches / longer.length;
+  return dp[m]![n]!;
 }
 
-export type ApplyResult = { value: string | number } | undefined;
+export type ApplyResult = { value: string | number; confidence: number } | undefined;
 
 /** Reads a single field off a page using a stored anchor. */
 export function applyTemplateField(
@@ -101,7 +111,7 @@ export function applyTemplateField(
   const raw = inside
     .map((w) => w.text)
     .join(" ")
-    .replace(/\s+/g, " ")
+    .replace(/\\s+/g, " ")
     .trim();
   if (!raw) return undefined;
   // Apply optional regex.
@@ -120,7 +130,12 @@ export function applyTemplateField(
     spec.type ?? (type ? inferType(type) : "string");
   const value = normalize(text, fieldType);
   if (value === undefined) return undefined;
-  return { value };
+  // Confidence is the geometric mean of word confidences — anchor gets a small
+  // boost because we already committed to a template match.
+  const wordConf = geometricMean(inside.map((w) => w.confidence));
+  const anchorConf = anchor.confidence;
+  const conf = Math.min(0.99, (wordConf * 0.7 + anchorConf * 0.3) * 0.97);
+  return { value, confidence: Number(conf.toFixed(2)) };
 }
 
 function clamp01(v: number): number {
@@ -133,6 +148,13 @@ function inferType(field: ZoneField): "string" | "number" | "decimal" | "date" {
   return "string";
 }
 
+function geometricMean(values: number[]): number {
+  if (values.length === 0) return 0.5;
+  let logSum = 0;
+  for (const v of values) logSum += Math.log(Math.max(0.01, v));
+  return Math.exp(logSum / values.length);
+}
+
 function normalize(
   text: string,
   type: "string" | "number" | "decimal" | "date",
@@ -143,8 +165,8 @@ function normalize(
     // Strip trailing non-numeric noise that the zone may have captured
     // alongside the value (e.g. a decoy "21%" or text like "incl. btw").
     // Find the last numeric token (with optional decimal part) and discard the rest.
-    const numMatch = trimmed.match(/([-]?\d[\d.,]*\d|[-]?\d)(?:[^\d]|$)/);
-    const cleaned = numMatch ? numMatch[0].replace(/[^\d.,\-]/g, "").replace(/[,.$]+$/, "") : trimmed;
+    const numMatch = trimmed.match(/([-]?\\d[\\d.,]*\\d|[-]?\\d)(?:[^\\d]|$)/);
+    const cleaned = numMatch ? numMatch[0].replace(/[^\\d.,\\-]/g, "").replace(/[,.$]+$/, "") : trimmed;
     const n = moneyToNumber(cleaned || trimmed);
     return n !== undefined ? Number(n.toFixed(2)) : undefined;
   }

@@ -2,8 +2,9 @@
  * Cross-source agreement.
  *
  * A vision model and the regex text scan are different engines reading the same
- * page. Disagreements remain visible as explicit cross-check outcomes; no
- * synthetic score is assigned to either reader.
+ * page. Agreement is recorded as provenance metadata and disagreement is
+ * surfaced in the audit trail; it never rewrites a field value or invents a
+ * numeric score.
  *
  * Comparison is delegated to `compareZoneValue`, the same field-aware
  * money/date/text agreement used by the zone sanity check, so there is exactly

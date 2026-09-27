@@ -1,10 +1,9 @@
 import { describe, expect, it } from "bun:test";
 import {
   operatorActor,
+  operatorActorWithRole,
   operatorName,
   OPERATOR_ROLES,
-  ORG_MEMBER_COUNT,
-  SOLE_USER,
   UNNAMED_OPERATOR,
 } from "./operator";
 import { EMPTY_BUSINESS_PROFILE } from "./types";
@@ -45,8 +44,10 @@ describe("the one operator", () => {
     expect(operatorActor(profile)).toEqual({ name: "Sam de Vries", roles: [...OPERATOR_ROLES] });
   });
 
-  it("keeps the single-member exemption tied to the same fact", () => {
-    expect(ORG_MEMBER_COUNT).toBe(1);
-    expect(SOLE_USER).toBe(ORG_MEMBER_COUNT === 1);
+  it("narrows to the action role without inventing another identity", () => {
+    expect(operatorActorWithRole("approver", { operatorName: "Sam de Vries" })).toEqual({
+      name: "Sam de Vries",
+      roles: ["approver"],
+    });
   });
 });

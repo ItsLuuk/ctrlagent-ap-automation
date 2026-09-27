@@ -13,20 +13,16 @@ export function ZoneCheckChip({
   result,
   currency,
   onFocus,
-  verified = false,
   className,
 }: {
   result: ZoneCheckResult | undefined;
   currency?: string | undefined;
   onFocus?: () => void;
-  /** The reviewer corrected this field after the original comparison. */
-  verified?: boolean | undefined;
   className?: string | undefined;
 }) {
   if (!result) return null;
   const { field, ai, ocr, match } = result;
-  const agrees = verified || match;
-  const tone = agrees
+  const tone = match
     ? "bg-success/15 text-success-foreground"
     : "bg-warning/15 text-warning-foreground";
   const displayAi = ai || "(empty)";
@@ -46,11 +42,9 @@ export function ZoneCheckChip({
       type="button"
       onClick={onFocus}
       title={
-        verified
-          ? `Verified: you corrected ${fieldLabel(field)} after comparing it with the document.`
-          : match
-            ? `Read twice: the value and the document text agree for ${fieldLabel(field)}.`
-            : `Read twice: the extracted value "${formattedAi}" doesn't match the document text "${formattedOcr}" for ${fieldLabel(field)}.`
+        match
+          ? `Read twice: the value and the document text agree for ${fieldLabel(field)}.`
+          : `Read twice: the extracted value "${formattedAi}" doesn't match the document text "${formattedOcr}" for ${fieldLabel(field)}.`
       }
       className={cn(
         "inline-flex items-center gap-1.5 rounded-sm px-1.5 py-0.5 text-xs font-medium",
@@ -58,13 +52,11 @@ export function ZoneCheckChip({
         className,
       )}
     >
-      {agrees ? <Check className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
+      {match ? <Check className="size-2.5" /> : <AlertTriangle className="size-2.5" />}
       <span className="font-mono">
-        {verified
-          ? `✓ ${fieldLabel(field)} · verified`
-          : match
-            ? `✓ ${fieldLabel(field)} · text agrees`
-            : `✗ ${fieldLabel(field)} · text differs: ${truncate(formattedOcr)}`}
+        {match
+          ? `✓ ${fieldLabel(field)} · text agrees`
+          : `✗ ${fieldLabel(field)} · text differs: ${truncate(formattedOcr)}`}
       </span>
     </button>
   );
@@ -95,11 +87,7 @@ function truncate(s: string): string {
   return s.length > 18 ? `${s.slice(0, 18)}…` : s;
 }
 
-/** Returns the ZoneCheckResult for a given field, if any. */
-export function resultFor(
-  results: ZoneCheckResult[] | undefined,
-  field: ZoneField,
-): ZoneCheckResult | undefined {
-  if (!results) return undefined;
-  return results.find((r) => r.field === field);
-}
+/** Returns the ZoneCheckResult for a given field, if any. Domain-owned now —
+ *  triage reads the same query without going through a component. */
+export { resultFor } from "@/lib/ap/mapping";
+

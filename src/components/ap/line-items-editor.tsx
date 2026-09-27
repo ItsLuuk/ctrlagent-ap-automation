@@ -132,7 +132,7 @@ export function LineItemsEditor({
   };
 
   return (
-    <section className="rounded-lg border border-border bg-card shadow-[0_1px_2px_rgba(0,0,0,0.04),0_8px_24px_rgba(0,0,0,0.05)]">
+    <section className="rounded-lg bg-card shadow-whisper">
       <button
         type="button"
         className="flex w-full items-center justify-between border-b border-border px-4 py-2.5"
@@ -151,8 +151,8 @@ export function LineItemsEditor({
         <div className="space-y-3 p-4">
           {!words ? (
             <p className="text-xs text-muted-foreground">
-              Line-item mapping needs the reading positions we kept for this invoice — new
-              vendors only.
+              Line-item mapping needs the reading positions we kept for this invoice — new vendors
+              only.
             </p>
           ) : (
             <>
@@ -218,7 +218,7 @@ export function LineItemsEditor({
                   {columns.map((column, index) => (
                     <div
                       key={index}
-                      className="flex items-center justify-between rounded-sm border border-border px-4 py-2 text-xs"
+                      className="flex items-center justify-between rounded-sm bg-card px-4 py-2 text-xs shadow-whisper"
                     >
                       <span className="font-medium">{column.field}</span>
                       <span className="flex items-center gap-2 text-muted-foreground">
@@ -241,7 +241,7 @@ export function LineItemsEditor({
               </label>
 
               {parsedRows.length > 0 && (
-                <div className="overflow-hidden rounded-lg border border-border">
+                <div className="overflow-hidden rounded-lg shadow-whisper">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-border bg-secondary/50 text-left text-muted-foreground">
@@ -276,6 +276,15 @@ export function LineItemsEditor({
               <Button size="sm" disabled={!region || columns.length === 0} onClick={save}>
                 <Check className="size-3.5" /> Save line-item mapping
               </Button>
+              {!region ? (
+                <p className="text-xs text-muted-foreground">
+                  Draw a region first — the band is where the line-item columns live.
+                </p>
+              ) : columns.length === 0 ? (
+                <p className="text-xs text-muted-foreground">
+                  Add at least one column before saving — a band without columns maps nothing.
+                </p>
+              ) : null}
             </>
           )}
         </div>

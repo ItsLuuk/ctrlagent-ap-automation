@@ -1,26 +1,14 @@
 /**
  * Purchase-order store (plan §1.1, §5 "pull early").
  *
- * Local app stand-in for the ERP vendor-master/PO pull: persists POs in
+ * In-browser stand-in for the ERP vendor-master/PO pull: persists POs in
  * localStorage and offers the same lookup surface the ERP sync layer will
  * implement later (find by vendor, find by id). When real ERP integration
  * lands, only this module's read/write functions change — the matching
  * engine and UI keep their contracts.
  */
-import type { InvoiceLineLike, PoLine } from "./matching";
-
-export type PurchaseOrder = {
-  id: string;
-  /** Human PO number shown in the UI, e.g. "PO-4471". */
-  number: string;
-  vendor: string;
-  currency: string;
-  issueDate: string;
-  lines: PoLine[];
-  /** Receipts per PO line — feeds 3-way matching. */
-  receipts: Array<{ poLineId: string; quantityReceived: number }>;
-  status: "open" | "closed";
-};
+import type { InvoiceLineLike, PoLine, ReceiptLine } from "./matching";
+import type { PurchaseOrder } from "./purchase-order";
 
 const STORAGE_KEY = "ap-automation-purchase-orders-v1";
 
@@ -132,52 +120,4 @@ export function deletePos(ids: string[]): PurchaseOrder[] {
   for (const id of ids) delete store[id];
   writeStore(store);
   return Object.values(store);
-}
-
-export function samplePos(): PurchaseOrder[] {
-  return [
-    {
-      id: "po-northwind-1",
-      number: "PO-4471",
-      vendor: "Northwind Cloud Systems",
-      currency: "USD",
-      issueDate: "2026-08-28",
-      status: "open",
-      lines: [
-        {
-          id: "pol-1",
-          description: "Compute cluster — annual commitment",
-          quantity: 1,
-          unitPrice: 14200,
-          amount: 14200,
-        },
-        {
-          id: "pol-2",
-          description: "Observability add-on (12 mo)",
-          quantity: 12,
-          unitPrice: 350,
-          amount: 4200,
-        },
-      ],
-      receipts: [{ poLineId: "pol-2", quantityReceived: 12 }],
-    },
-    {
-      id: "po-acme-1",
-      number: "PO-4488",
-      vendor: "Acme Corp",
-      currency: "USD",
-      issueDate: "2026-09-01",
-      status: "open",
-      lines: [
-        {
-          id: "pol-3",
-          description: "Widget pack",
-          quantity: 10,
-          unitPrice: 80,
-          amount: 800,
-        },
-      ],
-      receipts: [{ poLineId: "pol-3", quantityReceived: 10 }],
-    },
-  ];
 }

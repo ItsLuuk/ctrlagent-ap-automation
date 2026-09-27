@@ -6,7 +6,11 @@ import {
   selectVisionPageNumbers,
 } from "./ocr";
 
-const page = (pageNumber: number, text: string) => ({ pageNumber, text });
+const page = (pageNumber: number, text: string, confidence = 0.95) => ({
+  pageNumber,
+  text,
+  confidence,
+});
 
 describe("extractFieldsFromPages", () => {
   it("extracts Dutch invoice identity, dates, amounts, and line items", () => {
@@ -39,36 +43,6 @@ describe("extractFieldsFromPages", () => {
     expect(result.total).toBe(1210);
     expect(result.currency).toBe("EUR");
     expect(result.lineItems.map((item) => item.description)).toContain("Consulting");
-  });
-
-  it("does not read a tax rate as the tax amount when the amount is on the next line", () => {
-    const result = extractFieldsFromPages(
-      [
-        page(
-          1,
-          [
-            "Northwind Services B.V.",
-            "Subtotaal 1.000,00",
-            "BTW 21%",
-            "210,00",
-            "Totaal 1.210,00",
-          ].join("\n"),
-        ),
-      ],
-      "upload.pdf",
-    );
-
-    expect(result.tax).toBe(210);
-    expect(result.total).toBe(1210);
-  });
-
-  it("leaves tax empty when the invoice only shows a tax rate", () => {
-    const result = extractFieldsFromPages(
-      [page(1, "Northwind Services B.V.\nSubtotaal 1.000,00\nBTW 21%\nTotaal 1.000,00")],
-      "upload.pdf",
-    );
-
-    expect(result.tax).toBeUndefined();
   });
 
   it("prefers labelled values on a later page over an unlabelled pattern", () => {

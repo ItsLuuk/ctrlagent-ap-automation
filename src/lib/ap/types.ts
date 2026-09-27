@@ -21,36 +21,64 @@ export const STATUS_ORDER: InvoiceStatus[] = ["vendor_profile", "draft", "review
  * at. `processing` is the machine mid-read and `scheduled` is already approved,
  * so neither is on this list.
  *
- * One list, one number. The inbox's "Needs your judgment" tile and the sentence
- * above the queue both count it, which is why they cannot disagree about how
- * much is waiting on the operator — the old count was approvals only, so the
- * accented tile read 0 while a draft and a first-time vendor were waiting.
+ * One list, one number: the inbox's "Needs your judgment" tile counts it, which
+ * is why the tile and the rows it points at cannot disagree about how much is
+ * waiting on the operator — the old count was approvals only, so the accented
+ * tile read 0 while a draft and a first-time vendor were waiting.
  */
 export const AWAITING_PERSON: InvoiceStatus[] = ["vendor_profile", "draft", "review", "failed"];
 
-/** The inbox opens here: every stage whose next step is a person's. Same set
- *  as AWAITING_PERSON — the name reads correctly at tab/filter call sites. */
-export const NEEDS_YOU = AWAITING_PERSON;
+/**
+ * The invoice lifecycle as the inbox tabs show it: being prepared, waiting on
+ * an approval, waiting on payment, or closed. A record is never in two phases,
+ * and a phase is derived from the status rather than stored, so the two cannot
+ * drift apart.
+ *
+ * `vendor_profile` sits in `profiling` because a first-time vendor must be
+ * identified before invoice mapping can begin. `processing` and `failed` sit
+ * in `draft`; `rejected` sits there as well: the decision went against it, so
+ * it waits for someone to reopen it as a draft or remove it.
+ * `scheduled` is the app's existing status for "For payment" (see the
+ * payment/paid/rejected targets in state-machine.ts).
+ */
+export type Phase = "profiling" | "draft" | "approval" | "payment" | "history";
 
-/** The machine mid-read: nothing for a person to do until it lands or fails. */
-export const IN_FLIGHT: InvoiceStatus[] = ["processing"];
+/** The tab order, left to right: the order the work happens in. */
+export const PHASE_ORDER: Phase[] = ["profiling", "draft", "approval", "payment", "history"];
 
-/** Waiting on handoff or already settled — real, but not today's work. */
-export const LATER: InvoiceStatus[] = ["scheduled", "rejected", "paid", "archived"];
+export const PHASE_LABEL: Record<Phase, string> = {
+  profiling: "Profiling",
+  draft: "Draft",
+  approval: "For approval",
+  payment: "For payment",
+  history: "History",
+};
 
-export type Bucket = "needsYou" | "inFlight" | "later";
+/**
+ * The statuses each phase holds, listed in the order its tab shows them. Draft
+ * leads with the costliest wait — a broken read, then a first-time vendor to
+ * pin, then a draft to confirm, then a rejected record to reopen — while
+ * `processing` trails because the machine still holds it.
+ */
+export const PHASE_STATUSES: Record<Phase, InvoiceStatus[]> = {
+  profiling: ["vendor_profile"],
+  draft: ["failed", "draft", "rejected", "processing"],
+  approval: ["review"],
+  payment: ["scheduled"],
+  history: ["paid", "archived"],
+};
 
-/** Exhaustive by type: adding an InvoiceStatus without a bucket is a compile error. */
-export const BUCKET_BY_STATUS: Record<InvoiceStatus, Bucket> = {
-  vendor_profile: "needsYou",
-  draft: "needsYou",
-  review: "needsYou",
-  failed: "needsYou",
-  processing: "inFlight",
-  scheduled: "later",
-  rejected: "later",
-  paid: "later",
-  archived: "later",
+/** Exhaustive by type: adding an InvoiceStatus without a phase is a compile error. */
+export const PHASE_BY_STATUS: Record<InvoiceStatus, Phase> = {
+  vendor_profile: "profiling",
+  processing: "draft",
+  failed: "draft",
+  draft: "draft",
+  rejected: "draft",
+  review: "approval",
+  scheduled: "payment",
+  paid: "history",
+  archived: "history",
 };
 
 /**
@@ -86,12 +114,29 @@ export type LineItem = {
   page?: number | undefined;
 };
 
+export type AuditChange = {
+  before: string | number | boolean | null | undefined;
+  after: string | number | boolean | null | undefined;
+};
+
+export type FieldEvidence = {
+  value: string | number;
+  page?: number | undefined;
+  region?: Zone | undefined;
+  confidence?: number | undefined;
+  provenance?: Provenance | undefined;
+};
+
 export type AuditEntry = {
   id: string;
   at: string;
   actor: string;
   action: string;
   note?: string | undefined;
+  changes?: Record<string, AuditChange> | undefined;
+  /** Hash-chain links make later edits detectable without a server. */
+  previousHash?: string | undefined;
+  hash?: string | undefined;
 };
 
 export type ExtractedField =
@@ -109,9 +154,6 @@ export type ExtractedField =
   | "businessRegistrationNumber";
 
 export type ZoneField = ExtractedField;
-
-/** How a field value was obtained, without a synthetic numeric score. */
-export type Provenance = "exact" | "read" | "derived" | "manual";
 
 /** Normalized 0..1 rectangle anchored to a document image. */
 export type Zone = { x: number; y: number; w: number; h: number };
@@ -136,6 +178,12 @@ export type AnchorSpec = {
   type?: "string" | "number" | "decimal" | "date" | undefined;
   /** Optional date format hint (strftime-style) for "date" fields. */
   format?: string | undefined;
+  /**
+   * How this spec was learned. "typed" means a person supplied the value and
+   * the box was derived from the text; "drawn" means they placed it. Absent on
+   * every spec learned before this distinction existed.
+   */
+  learnedBy?: "typed" | "drawn" | undefined;
 };
 
 /**
@@ -187,7 +235,7 @@ export type DriftInfo = {
   /** Fields the stored template could not read on this invoice. */
   missing: ZoneField[];
   /** How each drifted field's value was recovered. */
-  recoveredBy: Partial<Record<ZoneField, "vlm" | "ocr-fallback">>;
+  recoveredBy: Partial<Record<ZoneField, "vlm" | "text">>;
   /** Template version that drifted (for the update-mode diff). */
   templateVersion: number | undefined;
   detectedAt: string;
@@ -196,12 +244,76 @@ export type DriftInfo = {
 /** Legacy shape carried by old `upsertTemplate` callers; new code uses VendorTemplate. */
 export type LegacyVendorTemplate = { fields: ZoneMap; updatedAt: string };
 
+/**
+ * One canonical per-vendor profile: zones, field patterns, and identity aliases
+ * in a single document. Confirm is the authoritative write; ingest auto-learn
+ * is a provisional cache that gets promoted or refined at confirm time.
+ *
+ * Version history is retained so a fat-fingered correction poisoning a stable
+ * profile is one revert away.
+ */
+export type VendorProfile = {
+  /** Resolved identity key (canonical vendor name). */
+  vendor_key: string;
+  /** Identity aliases: all known names, IBANs, VAT numbers, KvK numbers for this vendor. */
+  aliases: string[];
+  /** Zone/anchor specs for scalar header fields. */
+  fields: Partial<Record<ZoneField, AnchorSpec>>;
+  /**
+   * Fields this vendor's invoices do not print. Remembered so the same
+   * question is not asked again on every invoice from them — the negative
+   * memory is worth more than a box that would never be found.
+   */
+  absentFields?: ZoneField[] | undefined;
+  /** Optional learned line-item block. */
+  line_items?: LineItemsSpec | undefined;
+  /** Monotonically increasing version. */
+  version: number;
+  /** Why the current version was written. */
+  origin: "auto" | "reviewed" | "confirmed" | "drift-update";
+  /** Timestamp of the current version. */
+  updatedAt: string;
+  /** Retained version history (newest first). One revert away. */
+  history: VendorProfileVersion[];
+};
+
+/** A retained version of a vendor profile. */
+export type VendorProfileVersion = {
+  version: number;
+  fields: Partial<Record<ZoneField, AnchorSpec>>;
+  absentFields?: ZoneField[] | undefined;
+  line_items?: LineItemsSpec | undefined;
+  origin: "auto" | "reviewed" | "confirmed" | "drift-update";
+  updatedAt: string;
+};
+
 export type ZoneCheckResult = { field: ZoneField; ai: string; ocr: string; match: boolean };
+
+/**
+ * The editable scalar fields of a draft invoice, as strings — exactly what the
+ * draft inputs hold. Domain values (`subtotal: number`, ISO dates) live on the
+ * invoice; this is the reviewer's in-progress view of them, so it can hold a
+ * half-typed value that does not parse yet.
+ */
+export type DraftFields = {
+  vendor: string;
+  invoiceNumber: string;
+  issueDate: string;
+  dueDate: string;
+  subtotal: string;
+  tax: string;
+  total: string;
+  address: string;
+  vendorEmail: string;
+  iban: string;
+  vatNumber: string;
+  businessRegistrationNumber: string;
+};
 
 /**
  * Cross-source agreement for one field: two independent readers (the vision /
  * template path and the regex text scan) either agree, disagree, or one of them
- * had nothing to say. Disagreements are surfaced in the audit and approval UI.
+ * had nothing to say. A disagreement keeps the value and surfaces for review.
  */
 export type CrossCheckOutcome = "agree" | "disagree" | "unverified";
 export type CrossCheck = Partial<Record<ExtractedField, CrossCheckOutcome>>;
@@ -267,12 +379,43 @@ export type TemplateEngineResult = {
   provenance: Partial<Record<ZoneField, Provenance>>;
   fieldSources: Partial<Record<ZoneField, number>>;
   /** How this invoice was read. */
-  path: "template" | "vlm" | "ocr-fallback";
+  path: "template" | "vlm" | "text";
   /** Which template matched (fingerprint) when path === "template". */
   templateFingerprint?: string | undefined;
   /** Engine/model label when path === "vlm". */
   model?: string | undefined;
 };
+
+export type Provenance =
+  | "exact"    // UBL / embedded PDF text layer — the source of truth
+  | "read"     // template zone match or VLM read — seen by a reader
+  | "derived"  // computed from other fields (e.g. due date from payment terms)
+  | "manual";  // human-entered or confirmed at prompt time
+
+/** Map provenance to a UI color token. */
+export const PROVENANCE_COLOR: Record<Provenance, string> = {
+  exact:   "text-green-600 bg-green-50 border-green-200",
+  read:    "text-blue-600 bg-blue-50 border-blue-200",
+  derived: "text-muted-foreground bg-muted border-border",
+  manual:  "text-amber-600 bg-amber-50 border-amber-200",
+};
+
+/**
+ * Fixed merge priority. When two readers disagree on a field, reconciliation
+ * picks the value consistent with subtotal + tax / line sums. The priority
+ * exists only to decide which reader's value to try first.
+ *
+ *   UBL / text-layer regex  >  template zone  >  VLM  >  derived
+ */
+export const PROVENANCE_RANK: Record<Provenance, number> = {
+  exact:   4,
+  read:    3,
+  derived: 1,
+  manual:  2,
+};
+
+/** Threshold for auto-approve: every field is exact or read, nothing derived/manual. */
+export const AUTO_APPROVE_PROVENANCE = new Set(["exact", "read"]);
 
 /** Fields that carry a draggable anchor in Code-zones mode, in display order. */
 export const ZONE_FIELDS: ExtractedField[] = [
@@ -283,6 +426,21 @@ export const ZONE_FIELDS: ExtractedField[] = [
   "subtotal",
   "tax",
   "total",
+];
+
+/**
+ * Every invoice value that can be learned as a vendor-template region.
+ * `ZONE_FIELDS` remains the compact extraction/triage set; identity values are
+ * mapped from the same first-page evidence but are reviewed in the vendor
+ * profile rather than as scalar invoice rows.
+ */
+export const MAPPING_FIELDS: ExtractedField[] = [
+  ...ZONE_FIELDS,
+  "address",
+  "vendorEmail",
+  "iban",
+  "vatNumber",
+  "businessRegistrationNumber",
 ];
 
 export const ZONE_LABEL: Record<ExtractedField, string> = {
@@ -306,7 +464,8 @@ export const ZONE_LABEL: Record<ExtractedField, string> = {
 /**
  * User-facing labels for pipeline stages. The extractor emits internal stage
  * names; anything a user can read goes through this map so architecture never
- * leaks into a label.
+ * leaks into a label. Scanned pages render straight to the VLM — there is no
+ * separate layout-reading stage anymore.
  */
 export const STAGE_LABEL: Record<string, string> = {
   queued: "Queued",
@@ -335,6 +494,7 @@ export type OcrMethod = "text-layer" | "none";
 export type OcrPage = {
   pageNumber: number;
   charCount: number;
+  confidence: number;
   method: OcrPageMethod;
 };
 
@@ -363,9 +523,21 @@ export type Invoice = {
   lineItems: LineItem[];
   glAccount: string;
   department: string;
+  /** Optional spend category used to improve coding suggestions. */
+  category?: string | undefined;
+  /** Optional legal/business entity explicitly coded on the invoice. */
+  entity?: string | undefined;
+  /** Optional accounting dimensions for the coding handoff. */
+  costCenter?: string | undefined;
+  project?: string | undefined;
+  location?: string | undefined;
   memo: string;
   tags: string[];
-  /** Per-field extraction trace. Older records may not carry this metadata. */
+  /** Per-field extraction confidence, 0..1. Optional: records written before
+   *  the provenance model (and manual entries) carry none — readers must
+   *  treat a missing map as "no signal", not as zero. */
+  confidence?: Partial<Record<ExtractedField, number>> | undefined;
+  /** How each extracted value was obtained and whether it needs review. */
   provenance?: Partial<Record<ExtractedField, Provenance>> | undefined;
   audit: AuditEntry[];
   /** The invoice text states the amount was already paid (e.g. "reeds betaald"). */
@@ -373,19 +545,27 @@ export type Invoice = {
   /** Snippet from the document showing the prepaid phrasing, for the approval UI. */
   prepaidPhrase?: string | undefined;
   source: "sample" | "upload";
-  engine?: "gemma" | "template" | "ocr" | undefined;
+  /** SHA-256 of the original uploaded bytes. Computed at ingest for duplicate
+   *  detection. Empty string = not computed (sample/legacy invoices). */
+  fileHash?: string | undefined;
+  /** When this invoice is a duplicate of another (via "import anyway"), the
+   *  id of the original invoice it duplicates. */
+  duplicateOf?: string | undefined;
+  /** The extraction result as it came out of the pipeline, before any human
+   *  corrections. Stored so confirm-time can diff against it to compute
+   *  which fields were corrected. */
+  originalExtraction?: Partial<Record<ExtractedField, string | number | undefined>> | undefined;
+  engine?: "gemma" | "template" | "text" | undefined;
   /** Template fingerprint the engine matched, when engine === "template". */
   templateFingerprint?: string | undefined;
   /** Per-field trace: which engine produced each value. */
-  fieldPath?: Partial<Record<ExtractedField, "template" | "vlm" | "ocr-fallback">> | undefined;
+  fieldPath?: Partial<Record<ExtractedField, "template" | "vlm" | "text">> | undefined;
   /** Cached page payloads used to learn the vendor template. Kept only when
-   *  the engine that produced this invoice was VLM or OCR (i.e. novel). */
+   *  the engine that produced this invoice was VLM or document text (novel). */
   learnPayload?: LearnPayload | undefined;
   fileName?: string | undefined;
   fileType?: string | undefined;
   fileUrl?: string | undefined;
-  /** SHA-256 of the original uploaded bytes, used for ingest duplicate detection. */
-  fileHash?: string | undefined;
   ocrText?: string | undefined;
   pageCount?: number | undefined;
   ocrMethod?: OcrMethod | undefined;
@@ -394,9 +574,11 @@ export type Invoice = {
   fieldSources?: Partial<Record<ExtractedField, number>> | undefined;
   /** Anchors the reviewer drew on this invoice's image (saved per-vendor too). */
   zones?: ZoneMap | undefined;
+  /** Immutable snapshot of where each extracted field came from. */
+  fieldEvidence?: Partial<Record<ExtractedField, FieldEvidence>> | undefined;
   /** Transient processing state — set on creation while the VLM job runs. */
   processing?: ProcessingState | undefined;
-  /** Crop-OCR vs AI comparison from the vendor template, if one matched. */
+  /** Per-field verification result from the vendor template, if one matched. */
   zoneCheck?: ZoneCheckResult[] | undefined;
   /** Cross-source agreement between the primary reader and the text scan. */
   crossCheck?: CrossCheck | undefined;
@@ -425,9 +607,9 @@ export type InvoiceTag = (typeof PREDEFINED_TAGS)[number];
 export const TAG_TONES: Record<InvoiceTag, { border: string; accent: string }> = {
   Urgent: { border: "border-destructive", accent: "text-destructive" },
   Late: { border: "border-destructive", accent: "text-destructive" },
-  "First-time vendor": { border: "border-warning", accent: "text-warning-foreground" },
-  "High value": { border: "border-warning", accent: "text-warning-foreground" },
-  "Needs receipt": { border: "border-warning", accent: "text-warning-foreground" },
+  "First-time vendor": { border: "border-foundry-orange", accent: "text-foundry-orange" },
+  "High value": { border: "border-foundry-orange", accent: "text-foundry-orange" },
+  "Needs receipt": { border: "border-foundry-orange", accent: "text-foundry-orange" },
   "Duplicate risk": { border: "border-destructive", accent: "text-destructive" },
   International: { border: "border-steel", accent: "text-muted-foreground" },
   Recurring: { border: "border-border", accent: "text-muted-foreground" },
@@ -444,7 +626,6 @@ export const GL_ACCOUNTS = [
 
 export const DEPARTMENTS = ["Engineering", "Finance", "Marketing", "Operations", "Sales", "People"];
 
-/** Supported ISO 4217 currencies for the focused invoice workflow. */
 export const CURRENCY_OPTIONS = [
   { code: "EUR", label: "EUR · Euro" },
   { code: "USD", label: "USD · US dollar" },
@@ -466,10 +647,6 @@ export const money = (value: number, currency = "EUR") => {
   }).format(Number.isFinite(value) ? value : 0);
 };
 
-/**
- * Audit-trail timestamp: "Sep 23, 9:14 AM". One definition, so a decision and
- * the trail entry that recorded it read the same wherever the app quotes one.
- */
 export const shortDateTime = (iso: string) => {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -492,34 +669,20 @@ export const shortDate = (iso: string) => {
   });
 };
 
-/**
- * The user's own business profile. Used to filter out customer/bill-to data
- * during extraction — everything matching this profile is NOT the vendor.
- */
 export type BusinessProfile = {
-  /** Trading name / legal name of the user's business. */
+  /** Identity written to audit trails and compared by segregation-of-duties rules. */
+  operatorName?: string;
   name: string;
-  /** Street address (e.g. "Industrieweg 42, 1012 AB Amsterdam"). */
   address: string;
-  /** Email address. */
   email: string;
-  /** Dutch IBAN or international IBAN. */
   iban: string;
-  /** BTW / VAT identification number. */
   vatNumber: string;
-  /** Legacy Dutch name for the business registration number. */
   kvkNumber?: string;
-  /** Generic country-neutral business registration number. */
   businessRegistrationNumber?: string;
-  /**
-   * The person running this install, who signs every approval and release.
-   * Optional so profiles written before it keep loading; the operator module
-   * falls back to an unnamed operator rather than to a name the app invents.
-   */
-  operatorName?: string | undefined;
 };
 
 export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
+  operatorName: "",
   name: "",
   address: "",
   email: "",
@@ -527,5 +690,4 @@ export const EMPTY_BUSINESS_PROFILE: BusinessProfile = {
   vatNumber: "",
   kvkNumber: "",
   businessRegistrationNumber: "",
-  operatorName: "",
 };

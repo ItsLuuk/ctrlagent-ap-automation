@@ -1,16 +1,4 @@
-/**
- * Money totals, grouped the only way that is honest: one currency at a time.
- *
- * The inbox's work band is the only reader — "open payables" and "overdue" are
- * never added across currencies, and never formatted with a currency the data
- * does not have.
- *
- * The dashboard this module once fed is gone. What it counted was money already
- * approved or paid, so on a queue of invoices still waiting for a person it read
- * as four dashes and an empty list; its own numbers (cycle time, hands-off rate)
- * were the tool's self-portrait. The figure worth keeping — what is late — now
- * sits in the band, where the work is.
- */
+/** Currency-safe money totals and spend analysis for the analytics surface. */
 import { money, type Invoice } from "./types";
 
 export type CurrencyTotal = {
@@ -19,26 +7,110 @@ export type CurrencyTotal = {
   count: number;
 };
 
-/** Amounts of different currencies are never added: a mixed total is a number
- *  nobody can read, and one symbol on it states a currency the data lacks. */
 export function totalsByCurrency(invoices: Invoice[]): CurrencyTotal[] {
   const map = new Map<string, CurrencyTotal>();
-  for (const inv of invoices) {
-    const currency = inv.currency || "EUR";
+  for (const invoice of invoices) {
+    const currency = invoice.currency || "EUR";
     const bucket = map.get(currency) ?? { currency, total: 0, count: 0 };
-    bucket.total += inv.total;
+    bucket.total += invoice.total;
     bucket.count += 1;
     map.set(currency, bucket);
   }
   return [...map.values()].sort((a, b) => b.total - a.total);
 }
 
-/**
- * The sums as one line, a currency at a time — `€1,240.00 + $600.00`, never a
- * single blended figure. Shared by every money figure in the band, so the same
- * euro account cannot read in euros beside one tile and in dollars beside the
- * next.
- */
 export function moneyLine(totals: CurrencyTotal[]): string {
-  return totals.length === 0 ? "—" : totals.map((t) => money(t.total, t.currency)).join(" + ");
+  return totals.length === 0
+    ? "—"
+    : totals.map((total) => money(total.total, total.currency)).join(" + ");
+}
+
+export type SpendDimension = "vendor" | "category" | "department" | "entity" | "period";
+export type SpendPeriod = "month" | "quarter";
+
+export type SpendBucket = {
+  key: string;
+  label: string;
+  currency: string;
+  total: number;
+  count: number;
+  invoiceIds: string[];
+};
+
+export type SpendAnalysis = {
+  realized: CurrencyTotal[];
+  openPipeline: CurrencyTotal[];
+  buckets: Record<SpendDimension, SpendBucket[]>;
+};
+
+const currencyOf = (invoice: Invoice) => invoice.currency || "EUR";
+const clean = (value: string | undefined, fallback: string) => value?.trim() || fallback;const periodOf = (date: string | undefined, period: SpendPeriod): string => {
+  const match = /^(\d{4})-(\d{2})/.exec(date ?? "");
+  if (!match) return "Unknown period";
+  const year = match[1]!;
+  const month = Number(match[2]);
+  if (period === "month") return `${year}-${String(month).padStart(2, "0")}`;
+  return `${year}-Q${Math.ceil(month / 3)}`;
+};
+
+const dimensionValue = (
+  invoice: Invoice,
+  dimension: Exclude<SpendDimension, "period">,
+): string => {
+  if (dimension === "vendor") return clean(invoice.vendor, "Unassigned vendor");
+  if (dimension === "category") return clean(invoice.category, "Uncategorized");
+  if (dimension === "department") return clean(invoice.department, "Unassigned department");
+  return clean(invoice.entity, "Unassigned entity");
+};
+
+const makeBuckets = (
+  invoices: Invoice[],
+  dimension: SpendDimension,
+  period: SpendPeriod,
+): SpendBucket[] => {
+  const grouped = new Map<string, SpendBucket>();
+  for (const invoice of invoices) {
+    const label =
+      dimension === "period"
+        ? periodOf(invoice.issueDate, period)
+        : dimensionValue(invoice, dimension);
+    const currency = currencyOf(invoice);
+    const key = `${label}\u0000${currency}`.toLocaleLowerCase();
+    const bucket = grouped.get(key) ?? { key, label, currency, total: 0, count: 0, invoiceIds: [] };
+    bucket.total += invoice.total;
+    bucket.count += 1;
+    if (!bucket.invoiceIds.includes(invoice.id)) bucket.invoiceIds.push(invoice.id);
+    grouped.set(key, bucket);
+  }
+  return [...grouped.values()].sort(
+    (a, b) => b.total - a.total || a.label.localeCompare(b.label) || a.currency.localeCompare(b.currency),
+  );
+};
+
+/** Builds realized spend from paid history and keeps open commitments separate. */
+export function analyzeSpend(
+  paidInvoices: Invoice[],
+  openInvoices: Invoice[],
+  options: { from?: string; to?: string; currency?: string; period?: SpendPeriod } = {},
+): SpendAnalysis {
+  const period = options.period ?? "month";
+  const inRange = (invoice: Invoice) => {
+    const date = (invoice.issueDate ?? "").slice(0, 10);
+    if (options.from && date < options.from) return false;
+    if (options.to && date > options.to) return false;
+    return !options.currency || currencyOf(invoice) === options.currency;
+  };
+  const paid = paidInvoices.filter(inRange);
+  const open = openInvoices.filter(inRange);
+  return {
+    realized: totalsByCurrency(paid),
+    openPipeline: totalsByCurrency(open),
+    buckets: {
+      vendor: makeBuckets(paid, "vendor", period),
+      category: makeBuckets(paid, "category", period),
+      department: makeBuckets(paid, "department", period),
+      entity: makeBuckets(paid, "entity", period),
+      period: makeBuckets(paid, "period", period),
+    },
+  };
 }

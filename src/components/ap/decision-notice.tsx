@@ -45,8 +45,10 @@ export function DecisionNotice({
   return (
     <section
       className={cn(
-        "mt-5 rounded-lg border p-4",
-        approved ? "border-border bg-card" : "border-destructive/40 bg-destructive/5",
+        "mt-5 rounded-lg p-4",
+        approved
+          ? "bg-card shadow-whisper"
+          : "border border-destructive/40 bg-destructive/5",
         className,
       )}
     >

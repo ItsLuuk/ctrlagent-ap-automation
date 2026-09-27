@@ -58,4 +58,18 @@ describe("attentionForInvoice", () => {
   it("returns no attention for an ordinary linked review invoice", () => {
     expect(attentionForInvoice(invoice({ poId: "po-1" }))).toBeUndefined();
   });
+
+  it("removes no-PO attention when an eligible flex policy covers the invoice", () => {
+    expect(
+      attentionForInvoice(invoice(), undefined, {
+        status: "matched",
+        source: "contract",
+        evidenceId: "contract-1",
+        evidenceLabel: "Facilities agreement",
+        explanation: "Matched Facilities agreement.",
+        canAutoApprove: true,
+        blocksApproval: false,
+      }),
+    ).toBeUndefined();
+  });
 });

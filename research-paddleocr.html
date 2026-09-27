@@ -1,0 +1,38 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Foundry PaddleOCR.js research</title>
+<pre id="out">Loading PaddleOCR.js…</pre>
+<script type="module">
+import { PaddleOCR } from "/.desktop-builds/paddleocr-js/node_modules/@paddleocr/paddleocr-js/dist/index.mjs";
+const out = document.querySelector("#out");
+const files = [
+  "/.desktop-builds/research-pages/Invoice-RAX3IIUH-0002-p1.png",
+  "/.desktop-builds/research-pages/factuur_2607551285-p1.png",
+  "/.desktop-builds/research-pages/Superdoos.nl invoice-p1.png",
+  "/.desktop-builds/research-pages/Superdoos.nl invoice-p2.png",
+];
+try {
+  out.textContent = "Loading models…";
+  const ocr = await PaddleOCR.create({
+    lang: "en",
+    ocrVersion: "PP-OCRv5",
+    ortOptions: { backend: "wasm", numThreads: 4 },
+  });
+  const results = [];
+  for (const file of files) {
+    const blob = await (await fetch(file)).blob();
+    const bitmap = await createImageBitmap(blob);
+    const started = performance.now();
+    const [result] = await ocr.predict(bitmap);
+    const elapsedMs = Math.round(performance.now() - started);
+    results.push({ file, elapsedMs, metrics: result.metrics, runtime: result.runtime, text: result.items.map(x => x.text).join("\n") });
+    out.textContent = `${file}: ${elapsedMs}ms, ${result.items.length} lines`;
+  }
+  window.researchResult = results;
+  out.textContent = "DONE\n" + JSON.stringify(results, null, 2);
+  document.body.dataset.done = "true";
+} catch (error) {
+  out.textContent = "ERROR\n" + (error?.stack || error);
+  document.body.dataset.done = "error";
+}
+</script>
